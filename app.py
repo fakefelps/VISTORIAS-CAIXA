@@ -324,27 +324,34 @@ def preencher_excel_e_exportar_pdf(
     log=None,
 ):
     """
-    Preenche o Memorial e exporta PDF em UMA única sessão Excel COM.
-    Aceita .xls ou .xlsx sem conversão prévia.
-    Não usa openpyxl — elimina todos os erros de formato legado.
+    ESTRATÉGIA:
+    1. Abre o .xls/.xlsx via Excel COM
+    2. Preenche células via Range().Value
+    3. Salva como .xlsx temporário (FileFormat=51)
+    4. Fecha Excel
+    5. Manipula checkboxes e assinatura via XML direto no .xlsx (openpyxl + zipfile)
+    6. Reabre no Excel só para exportar PDF
+    Isso evita 100% dos erros de named_property no COM para shapes.
     """
-    import comtypes.client
+    import comtypes.client, shutil, zipfile, traceback
+    from xml.etree import ElementTree as ET
 
     def _log(msg):
         if log:
             log(msg)
 
+    # ── PASSO 1: Abrir e preencher células via COM ──
     _log("Abrindo Excel via COM...")
-    excel = comtypes.client.CreateObject("Excel.Application")
-    excel.Visible = False
-    excel.DisplayAlerts = False
-
+    excel = None
+    wb    = None
     try:
+        excel = comtypes.client.CreateObject("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
         wb = excel.Workbooks.Open(os.path.abspath(template_path))
         ws = wb.Worksheets("ElemConstrutivos")
-        _log("Excel aberto com sucesso.")
+        _log("Excel aberto.")
 
-        # ── Preencher células ──
         _log("Preenchendo células...")
         mapa = {
             "G40":  dados.get("contratante", ""),
@@ -368,66 +375,141 @@ def preencher_excel_e_exportar_pdf(
         for coord, valor in mapa.items():
             ws.Range(coord).Value = valor
 
-        # ── Checkboxes de esgoto via shapes ──
-        # Marcado = fill preto (RGB 0,0,0)
-        # Desmarcado = fill branco (RGB 16777215 = 0xFFFFFF) para simular vazio
-        _log(f"Configurando checkbox esgoto → {'SIM' if esgoto_sim else 'NÃO'}...")
-        COR_MARCADO   = 0x000000   # preto
-        COR_DESMARCADO = 0xFFFFFF  # branco
-        for shape in ws.Shapes:
-            nome = shape.Name
-            if nome == SHAPE_ESGOTO_SIM:
-                shape.Fill.Solid()
-                shape.Fill.ForeColor.RGB = COR_MARCADO if esgoto_sim else COR_DESMARCADO
-            elif nome == SHAPE_ESGOTO_NAO:
-                shape.Fill.Solid()
-                shape.Fill.ForeColor.RGB = COR_MARCADO if not esgoto_sim else COR_DESMARCADO
-
-        # ── Inserir assinatura ──
-        if assinatura_path and os.path.exists(assinatura_path):
-            _log("Inserindo assinatura no Excel...")
-            try:
-                # Posição em pontos: col AE ≈ 1420pt, row 73 ≈ 960pt
-                cel = ws.Range("AE73")
-                left = cel.Left
-                top  = cel.Top
-                ws.Shapes.AddPicture(
-                    os.path.abspath(assinatura_path),
-                    0,      # LinkToFile = False
-                    1,      # SaveWithDocument = True
-                    left, top, 120, 45
-                )
-                _log("Assinatura inserida.")
-            except Exception as e:
-                _log(f"⚠ Assinatura Excel: {e}")
-        else:
-            _log("⚠ Assinatura não encontrada — pulando.")
-
-        # ── Salvar como .xlsx ──
-        _log(f"Salvando Excel: {Path(xlsx_saida).name}")
-        wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)  # 51 = xlOpenXMLWorkbook
-
-        # ── Exportar PDF (1 página) ──
-        _log(f"Exportando PDF: {Path(pdf_saida).name}")
-        ws.PageSetup.Zoom = False
-        ws.PageSetup.FitToPagesWide = 1
-        ws.PageSetup.FitToPagesTall = 1
-        ws.ExportAsFixedFormat(0, os.path.abspath(pdf_saida), 1, True, False)
-
+        # Salvar como .xlsx — sem tocar em shapes aqui
+        _log(f"Salvando .xlsx: {Path(xlsx_saida).name}")
+        wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)
         wb.Close(False)
-        _log("✓ Excel concluído.")
+        wb = None
+        excel.Quit()
+        excel = None
+        _log("Células salvas.")
 
     except Exception as e:
+        _log(f"✗ Erro COM (células): {traceback.format_exc()}")
         try:
-            wb.Close(False)
+            if wb:    wb.Close(False)
+            if excel: excel.Quit()
         except Exception:
             pass
         raise
-    finally:
+
+    # ── PASSO 2: Manipular checkboxes via XML no .xlsx ──
+    _log(f"Ajustando checkbox esgoto via XML → {'SIM' if esgoto_sim else 'NÃO'}...")
+    try:
+        _ajustar_checkbox_esgoto_xlsx(xlsx_saida, esgoto_sim, _log)
+    except Exception as e:
+        _log(f"⚠ Checkpoint esgoto (não crítico): {e}")
+
+    # ── PASSO 3: Inserir assinatura via openpyxl ──
+    if assinatura_path and os.path.exists(assinatura_path):
+        _log("Inserindo assinatura no Excel...")
         try:
-            excel.Quit()
+            from openpyxl import load_workbook
+            from openpyxl.drawing.image import Image as XLImage
+            wb2 = load_workbook(xlsx_saida)
+            ws2 = wb2["ElemConstrutivos"]
+            img = XLImage(assinatura_path)
+            img.width  = 120
+            img.height = 45
+            img.anchor = "AE73"
+            ws2.add_image(img)
+            wb2.save(xlsx_saida)
+            _log("Assinatura inserida.")
+        except Exception as e:
+            _log(f"⚠ Assinatura Excel (não crítico): {e}")
+    else:
+        _log("⚠ Assinatura não encontrada — pulando.")
+
+    # ── PASSO 4: Exportar PDF via COM ──
+    _log(f"Exportando PDF: {Path(pdf_saida).name}")
+    excel2 = None
+    wb2c   = None
+    try:
+        excel2 = comtypes.client.CreateObject("Excel.Application")
+        excel2.Visible = False
+        excel2.DisplayAlerts = False
+        wb2c = excel2.Workbooks.Open(os.path.abspath(xlsx_saida))
+        ws2c = wb2c.Worksheets("ElemConstrutivos")
+        ws2c.PageSetup.Zoom = False
+        ws2c.PageSetup.FitToPagesWide = 1
+        ws2c.PageSetup.FitToPagesTall = 1
+        ws2c.ExportAsFixedFormat(0, os.path.abspath(pdf_saida), 1, True, False)
+        wb2c.Close(False)
+        excel2.Quit()
+        _log("✓ PDF Excel gerado.")
+    except Exception as e:
+        _log(f"✗ Erro exportação PDF Excel: {traceback.format_exc()}")
+        try:
+            if wb2c:   wb2c.Close(False)
+            if excel2: excel2.Quit()
         except Exception:
             pass
+        raise
+
+
+def _ajustar_checkbox_esgoto_xlsx(xlsx_path: str, esgoto_sim: bool, log=None):
+    """
+    Manipula checkboxes de esgoto diretamente no XML do drawing.
+    SIM marcado  = solidFill preto (000000)
+    NÃO marcado  = solidFill branco (FFFFFF)
+    Funciona com qualquer versão do Excel instalado.
+    """
+    NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    NS_A   = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    tmp = xlsx_path + ".ckbk.tmp"
+    shutil.copy2(xlsx_path, tmp)
+
+    with zipfile.ZipFile(tmp, "r") as zin,          zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+
+            if item.filename == "xl/drawings/drawing1.xml":
+                ET.register_namespace("xdr", NS_XDR)
+                ET.register_namespace("a",   NS_A)
+                root = ET.fromstring(data)
+
+                for anchor in root.findall(f"{{{NS_XDR}}}twoCellAnchor"):
+                    sp = anchor.find(f"{{{NS_XDR}}}sp")
+                    if sp is None:
+                        continue
+                    cNvPr = sp.find(f".//{{{NS_XDR}}}cNvPr")
+                    if cNvPr is None:
+                        continue
+                    nome = cNvPr.get("name", "")
+
+                    if nome not in (SHAPE_ESGOTO_SIM, SHAPE_ESGOTO_NAO):
+                        continue
+
+                    spPr = sp.find(f"{{{NS_XDR}}}spPr")
+                    if spPr is None:
+                        continue
+
+                    # Determinar cor: marcado=preto, desmarcado=branco
+                    if nome == SHAPE_ESGOTO_SIM:
+                        cor = "000000" if esgoto_sim else "FFFFFF"
+                    else:
+                        cor = "000000" if not esgoto_sim else "FFFFFF"
+
+                    # Remover fill anterior
+                    for tag in [f"{{{NS_A}}}solidFill", f"{{{NS_A}}}noFill"]:
+                        el = spPr.find(tag)
+                        if el is not None:
+                            spPr.remove(el)
+
+                    # Inserir solidFill com a cor correta
+                    solid = ET.SubElement(spPr, f"{{{NS_A}}}solidFill")
+                    clr   = ET.SubElement(solid, f"{{{NS_A}}}srgbClr")
+                    clr.set("val", cor)
+
+                data = ET.tostring(root, encoding="UTF-8", xml_declaration=True)
+
+            zout.writestr(item, data)
+
+    os.remove(tmp)
+    if log:
+        log(f"  Checkbox esgoto → {'SIM' if esgoto_sim else 'NÃO'} (XML)")
 
 
 # ══════════════════════════════════════════════
@@ -999,6 +1081,7 @@ class App(tk.Tk):
         self.btn.config(state="disabled")
 
         def _run():
+            import traceback
             try:
                 processar(
                     params,
@@ -1007,7 +1090,8 @@ class App(tk.Tk):
                 )
                 self.after(0, self._done, True)
             except Exception as e:
-                self.after(0, self._log, f"\n✗ ERRO: {e}")
+                tb = traceback.format_exc()
+                self.after(0, self._log, f"\n✗ ERRO COMPLETO:\n{tb}")
                 self.after(0, self._done, False)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -1017,15 +1101,43 @@ class App(tk.Tk):
         if ok:
             messagebox.showinfo(
                 "Concluído",
-                f"Documentos gerados com sucesso!\n\n"
-                f"Pasta: {self.var_saida.get()}"
+                f"Documentos gerados com sucesso!\n\nPasta: {self.var_saida.get()}"
             )
         else:
-            messagebox.showerror(
-                "Erro",
-                "Ocorreu um erro durante o processamento.\n"
-                "Verifique o log para detalhes."
-            )
+            # Salvar relatório de erro automaticamente
+            log_text = self.txt_log.get("1.0", "end")
+            saida = self.var_saida.get().strip()
+            if saida:
+                import datetime, traceback
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                rel_path = os.path.join(saida, f"ERRO_{ts}.txt")
+                try:
+                    with open(rel_path, "w", encoding="utf-8") as f:
+                        f.write("RELATÓRIO DE ERRO — Morais Engenharia\n")
+                        f.write("=" * 50 + "\n")
+                        f.write(f"Data/hora: {datetime.datetime.now()}\n")
+                        f.write(f"Template Word:  {self.var_word.get()}\n")
+                        f.write(f"Template Excel: {self.var_excel.get()}\n")
+                        f.write(f"Engenheiro:     {self.var_eng.get()}\n")
+                        f.write("=" * 50 + "\n\n")
+                        f.write("LOG DE EXECUÇÃO:\n")
+                        f.write(log_text)
+                    messagebox.showerror(
+                        "Erro",
+                        f"Ocorreu um erro durante o processamento.\n\n"
+                        f"Relatório salvo em:\n{rel_path}\n\n"
+                        f"Envie esse arquivo para suporte."
+                    )
+                except Exception:
+                    messagebox.showerror(
+                        "Erro",
+                        "Ocorreu um erro. Verifique o log na tela."
+                    )
+            else:
+                messagebox.showerror(
+                    "Erro",
+                    "Ocorreu um erro durante o processamento.\nVerifique o log para detalhes."
+                )
 
 
 # ══════════════════════════════════════════════
