@@ -18,15 +18,18 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install python-docx openpyxl comtypes pillow lxml pyinstaller
+          pip install python-docx openpyxl pywin32 pillow lxml pyinstaller
 
       - name: Gerar EXE
         run: |
           python -m PyInstaller --onefile --windowed `
             --name "PreencherDocumentos" `
             --icon "icone.ico" `
-            --hidden-import comtypes.server.inprocserver `
-            --hidden-import comtypes.client `
+            --hidden-import win32com.client `
+            --hidden-import win32com.server.util `
+            --hidden-import win32api `
+            --hidden-import win32con `
+            --hidden-import pywintypes `
             --hidden-import PIL._imaging `
             --hidden-import PIL.Image `
             --hidden-import docx `
@@ -35,6 +38,7 @@ jobs:
             --hidden-import openpyxl `
             --hidden-import openpyxl.styles `
             --hidden-import openpyxl.drawing.image `
+            --collect-all win32com `
             --collect-all docx `
             --collect-all openpyxl `
             --collect-all lxml `
