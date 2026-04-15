@@ -314,45 +314,24 @@ def _inserir_assinatura_word(doc, img_path: str, log=None):
 # PROCESSAMENTO — EXCEL (Memorial)
 # ══════════════════════════════════════════════
 
-def preencher_excel_e_exportar_pdf(
-    template_path: str,
-    xlsx_saida: str,
-    pdf_saida: str,
-    dados: dict,
-    esgoto_sim: bool,
-    assinatura_path: str,
-    log=None,
-):
+def _excel_com(template_path, xlsx_saida, dados, log):
     """
-    ESTRATÉGIA:
-    1. Abre o .xls/.xlsx via Excel COM
-    2. Preenche células via Range().Value
-    3. Salva como .xlsx temporário (FileFormat=51)
-    4. Fecha Excel
-    5. Manipula checkboxes e assinatura via XML direto no .xlsx (openpyxl + zipfile)
-    6. Reabre no Excel só para exportar PDF
-    Isso evita 100% dos erros de named_property no COM para shapes.
+    Usa win32com (dispatch dinâmico) para abrir o .xls/.xlsx,
+    preencher células e salvar como .xlsx.
+    win32com não tem o bug named_property do comtypes.
     """
-    import comtypes.client, shutil, zipfile, traceback
-    from xml.etree import ElementTree as ET
+    import win32com.client, traceback
 
-    def _log(msg):
-        if log:
-            log(msg)
-
-    # ── PASSO 1: Abrir e preencher células via COM ──
-    _log("Abrindo Excel via COM...")
-    excel = None
-    wb    = None
+    xl = None
+    wb = None
     try:
-        excel = comtypes.client.CreateObject("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        wb = excel.Workbooks.Open(os.path.abspath(template_path))
+        xl = win32com.client.Dispatch("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        wb = xl.Workbooks.Open(os.path.abspath(template_path))
         ws = wb.Worksheets("ElemConstrutivos")
-        _log("Excel aberto.")
+        log("Excel aberto (win32com).")
 
-        _log("Preenchendo células...")
         mapa = {
             "G40":  dados.get("contratante", ""),
             "G43":  dados.get("engenheiro_nome", ""),
@@ -372,78 +351,113 @@ def preencher_excel_e_exportar_pdf(
             "AE78": dados.get("cpf", ""),
             "AE79": dados.get("crea", ""),
         }
+        log("Preenchendo células...")
         for coord, valor in mapa.items():
             ws.Range(coord).Value = valor
 
-        # Salvar como .xlsx — sem tocar em shapes aqui
-        _log(f"Salvando .xlsx: {Path(xlsx_saida).name}")
-        wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)
+        log(f"Salvando .xlsx: {Path(xlsx_saida).name}")
+        wb.SaveAs(os.path.abspath(xlsx_saida), 51)   # 51 = xlOpenXMLWorkbook
         wb.Close(False)
-        wb = None
-        excel.Quit()
-        excel = None
-        _log("Células salvas.")
+        xl.Quit()
+        log("Células salvas com sucesso.")
 
-    except Exception as e:
-        _log(f"✗ Erro COM (células): {traceback.format_exc()}")
+    except Exception:
         try:
-            if wb:    wb.Close(False)
-            if excel: excel.Quit()
+            if wb: wb.Close(False)
+            if xl: xl.Quit()
         except Exception:
             pass
         raise
 
-    # ── PASSO 2: Manipular checkboxes via XML no .xlsx ──
-    _log(f"Ajustando checkbox esgoto via XML → {'SIM' if esgoto_sim else 'NÃO'}...")
+
+def _excel_pdf(xlsx_path, pdf_path, log):
+    """Exporta .xlsx para PDF via win32com (1 página)."""
+    import win32com.client
+
+    xl = None
+    wb = None
+    try:
+        xl = win32com.client.Dispatch("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
+        ws = wb.Worksheets("ElemConstrutivos")
+        ws.PageSetup.Zoom = False
+        ws.PageSetup.FitToPagesWide = 1
+        ws.PageSetup.FitToPagesTall = 1
+        ws.ExportAsFixedFormat(0, os.path.abspath(pdf_path), 1, True, False)
+        wb.Close(False)
+        xl.Quit()
+        log(f"✓ PDF Excel: {Path(pdf_path).name}")
+    except Exception:
+        try:
+            if wb: wb.Close(False)
+            if xl: xl.Quit()
+        except Exception:
+            pass
+        raise
+
+
+def preencher_excel_e_exportar_pdf(
+    template_path: str,
+    xlsx_saida: str,
+    pdf_saida: str,
+    dados: dict,
+    esgoto_sim: bool,
+    assinatura_path: str,
+    log=None,
+):
+    """
+    Fluxo:
+    1. win32com → abre .xls/.xlsx, preenche células, salva .xlsx
+    2. zipfile/XML → ajusta checkboxes de esgoto
+    3. openpyxl → insere assinatura
+    4. win32com → exporta PDF
+    """
+    import traceback
+
+    def _log(msg):
+        if log: log(msg)
+
+    # ── 1. Preencher via win32com ──
+    _log("Abrindo Excel...")
+    try:
+        _excel_com(template_path, xlsx_saida, dados, _log)
+    except Exception:
+        _log("✗ Erro ao preencher Excel:\n" + traceback.format_exc())
+        raise
+
+    # ── 2. Checkboxes via XML ──
+    _log(f"Checkboxes esgoto → {'SIM' if esgoto_sim else 'NÃO'}...")
     try:
         _ajustar_checkbox_esgoto_xlsx(xlsx_saida, esgoto_sim, _log)
     except Exception as e:
-        _log(f"⚠ Checkpoint esgoto (não crítico): {e}")
+        _log(f"⚠ Checkboxes (não crítico): {e}")
 
-    # ── PASSO 3: Inserir assinatura via openpyxl ──
+    # ── 3. Assinatura via openpyxl ──
     if assinatura_path and os.path.exists(assinatura_path):
-        _log("Inserindo assinatura no Excel...")
+        _log("Inserindo assinatura...")
         try:
             from openpyxl import load_workbook
             from openpyxl.drawing.image import Image as XLImage
             wb2 = load_workbook(xlsx_saida)
             ws2 = wb2["ElemConstrutivos"]
             img = XLImage(assinatura_path)
-            img.width  = 120
-            img.height = 45
-            img.anchor = "AE73"
+            img.width, img.height, img.anchor = 120, 45, "AE73"
             ws2.add_image(img)
             wb2.save(xlsx_saida)
             _log("Assinatura inserida.")
         except Exception as e:
-            _log(f"⚠ Assinatura Excel (não crítico): {e}")
+            _log(f"⚠ Assinatura (não crítico): {e}")
     else:
         _log("⚠ Assinatura não encontrada — pulando.")
 
-    # ── PASSO 4: Exportar PDF via COM ──
-    _log(f"Exportando PDF: {Path(pdf_saida).name}")
-    excel2 = None
-    wb2c   = None
+    # ── 4. Exportar PDF via win32com ──
+    _log("Exportando PDF Excel...")
     try:
-        excel2 = comtypes.client.CreateObject("Excel.Application")
-        excel2.Visible = False
-        excel2.DisplayAlerts = False
-        wb2c = excel2.Workbooks.Open(os.path.abspath(xlsx_saida))
-        ws2c = wb2c.Worksheets("ElemConstrutivos")
-        ws2c.PageSetup.Zoom = False
-        ws2c.PageSetup.FitToPagesWide = 1
-        ws2c.PageSetup.FitToPagesTall = 1
-        ws2c.ExportAsFixedFormat(0, os.path.abspath(pdf_saida), 1, True, False)
-        wb2c.Close(False)
-        excel2.Quit()
-        _log("✓ PDF Excel gerado.")
-    except Exception as e:
-        _log(f"✗ Erro exportação PDF Excel: {traceback.format_exc()}")
-        try:
-            if wb2c:   wb2c.Close(False)
-            if excel2: excel2.Quit()
-        except Exception:
-            pass
+        _excel_pdf(xlsx_saida, pdf_saida, _log)
+    except Exception:
+        _log("✗ Erro ao exportar PDF Excel:\n" + traceback.format_exc())
         raise
 
 
@@ -519,8 +533,8 @@ def _ajustar_checkbox_esgoto_xlsx(xlsx_path: str, esgoto_sim: bool, log=None):
 def exportar_word_pdf(docx_path: str, pdf_path: str, log=None):
     """Exporta .docx para .pdf via Word COM automation."""
     try:
-        import comtypes.client
-        word = comtypes.client.CreateObject("Word.Application")
+        import win32com.client
+        word = win32com.client.Dispatch("Word.Application")
         word.Visible = False
         doc = word.Documents.Open(os.path.abspath(docx_path))
         doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)  # 17 = wdFormatPDF
