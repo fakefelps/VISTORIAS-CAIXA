@@ -369,22 +369,19 @@ def preencher_excel_e_exportar_pdf(
             ws.Range(coord).Value = valor
 
         # ── Checkboxes de esgoto via shapes ──
+        # Marcado = fill preto (RGB 0,0,0)
+        # Desmarcado = fill branco (RGB 16777215 = 0xFFFFFF) para simular vazio
         _log(f"Configurando checkbox esgoto → {'SIM' if esgoto_sim else 'NÃO'}...")
+        COR_MARCADO   = 0x000000   # preto
+        COR_DESMARCADO = 0xFFFFFF  # branco
         for shape in ws.Shapes:
             nome = shape.Name
             if nome == SHAPE_ESGOTO_SIM:
-                # SIM marcado = Fill.ForeColor preto + Fill.Visible
-                if esgoto_sim:
-                    shape.Fill.ForeColor.RGB = 0x000000
-                    shape.Fill.Solid()
-                else:
-                    shape.Fill.Visible = 0   # msoFalse = 0
+                shape.Fill.Solid()
+                shape.Fill.ForeColor.RGB = COR_MARCADO if esgoto_sim else COR_DESMARCADO
             elif nome == SHAPE_ESGOTO_NAO:
-                if not esgoto_sim:
-                    shape.Fill.ForeColor.RGB = 0x000000
-                    shape.Fill.Solid()
-                else:
-                    shape.Fill.Visible = 0
+                shape.Fill.Solid()
+                shape.Fill.ForeColor.RGB = COR_MARCADO if not esgoto_sim else COR_DESMARCADO
 
         # ── Inserir assinatura ──
         if assinatura_path and os.path.exists(assinatura_path):
