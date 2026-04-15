@@ -314,182 +314,123 @@ def _inserir_assinatura_word(doc, img_path: str, log=None):
 # PROCESSAMENTO — EXCEL (Memorial)
 # ══════════════════════════════════════════════
 
-def preencher_excel(
+def preencher_excel_e_exportar_pdf(
     template_path: str,
-    saida_path: str,
+    xlsx_saida: str,
+    pdf_saida: str,
     dados: dict,
     esgoto_sim: bool,
     assinatura_path: str,
     log=None,
 ):
     """
-    Preenche o Memorial Excel com os dados fornecidos.
-    Manipula checkboxes diretamente no XML do drawing.
+    Preenche o Memorial e exporta PDF em UMA única sessão Excel COM.
+    Aceita .xls ou .xlsx sem conversão prévia.
+    Não usa openpyxl — elimina todos os erros de formato legado.
     """
-    import zipfile
-    import shutil
-    from xml.etree import ElementTree as ET
-    from openpyxl import load_workbook
-    from openpyxl.utils import get_column_letter
-    from openpyxl.drawing.image import Image as XLImage
+    import comtypes.client
 
     def _log(msg):
         if log:
             log(msg)
 
-    _log("Copiando template Excel...")
-    shutil.copy2(template_path, saida_path)
-
-    # ── Passo 1: Preencher células com python via openpyxl ──
-    _log("Preenchendo células do Excel...")
-    wb = load_workbook(saida_path)
-    ws = wb["ElemConstrutivos"]
-
-    mapa_celulas = {
-        "G40":  dados.get("contratante", ""),
-        "G43":  dados.get("engenheiro_nome", ""),
-        "AH43": dados.get("crea", ""),
-        "AP43": "GO",
-        "AR43": dados.get("cpf", ""),
-        "G47":  dados.get("logradouro", ""),
-        "AJ47": dados.get("quadra_lote", ""),
-        "G49":  dados.get("bairro", ""),
-        "V49":  dados.get("cep", ""),
-        "AA49": dados.get("cidade", ""),
-        "AU49": dados.get("uf", ""),
-        "H53":  dados.get("engenheiro_nome", ""),
-        "Y54":  dados.get("art", ""),
-        "H75":  f"GOIÂNIA, {formatar_data_hoje()}",
-        "AE77": dados.get("engenheiro_nome", ""),
-        "AE78": dados.get("cpf", ""),
-        "AE79": dados.get("crea", ""),
-    }
-
-    from openpyxl.styles import Font
-    for coord, valor in mapa_celulas.items():
-        cell = ws[coord]
-        cell.value = valor
-        # Preservar fonte existente, apenas mudar valor
-        if cell.font:
-            cell.font = Font(
-                name=cell.font.name,
-                size=cell.font.size,
-                bold=cell.font.bold,
-                italic=cell.font.italic,
-                color="000000",
-            )
-
-    wb.save(saida_path)
-    _log("Células preenchidas.")
-
-    # ── Passo 2: Manipular checkboxes de esgoto no XML ──
-    _log("Configurando checkboxes de esgoto no XML...")
-    _ajustar_checkbox_esgoto(saida_path, esgoto_sim, log)
-
-    # ── Passo 3: Inserir assinatura como imagem ──
-    _log("Inserindo assinatura no Excel...")
-    _inserir_assinatura_excel(saida_path, assinatura_path, log)
-
-    _log("Excel preenchido com sucesso.")
-
-
-def _ajustar_checkbox_esgoto(xlsx_path: str, esgoto_sim: bool, log=None):
-    """
-    Modifica o drawing XML para marcar/desmarcar os checkboxes de esgoto.
-    SIM marcado = solidFill preto | NÃO marcado = noFill
-    """
-    import zipfile, shutil, os
-    from xml.etree import ElementTree as ET
-
-    NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
-    NS_A   = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
-    tmp_path = xlsx_path + ".tmp"
-    shutil.copy2(xlsx_path, tmp_path)
-
-    with zipfile.ZipFile(tmp_path, "r") as zin, \
-         zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
-
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-
-            if item.filename == "xl/drawings/drawing1.xml":
-                ET.register_namespace("xdr", NS_XDR)
-                ET.register_namespace("a",   NS_A)
-
-                root = ET.fromstring(data)
-
-                for anchor in root.findall(f"{{{NS_XDR}}}twoCellAnchor"):
-                    sp = anchor.find(f"{{{NS_XDR}}}sp")
-                    if sp is None:
-                        continue
-                    cNvPr = sp.find(f".//{{{NS_XDR}}}cNvPr")
-                    if cNvPr is None:
-                        continue
-                    name = cNvPr.get("name", "")
-
-                    if name not in (SHAPE_ESGOTO_SIM, SHAPE_ESGOTO_NAO):
-                        continue
-
-                    spPr = sp.find(f"{{{NS_XDR}}}spPr")
-                    if spPr is None:
-                        continue
-
-                    # Remover fill existente
-                    for tag in [f"{{{NS_A}}}solidFill", f"{{{NS_A}}}noFill"]:
-                        el = spPr.find(tag)
-                        if el is not None:
-                            spPr.remove(el)
-
-                    # Inserir fill correto
-                    if (name == SHAPE_ESGOTO_SIM and esgoto_sim) or \
-                       (name == SHAPE_ESGOTO_NAO and not esgoto_sim):
-                        # Marcar: solidFill preto
-                        solid = ET.SubElement(spPr, f"{{{NS_A}}}solidFill")
-                        clr   = ET.SubElement(solid, f"{{{NS_A}}}srgbClr")
-                        clr.set("val", "000000")
-                    else:
-                        # Desmarcar: noFill
-                        ET.SubElement(spPr, f"{{{NS_A}}}noFill")
-
-                data = ET.tostring(root, encoding="UTF-8", xml_declaration=True)
-
-            zout.writestr(item, data)
-
-    os.remove(tmp_path)
-    if log:
-        log(f"  Checkbox esgoto → {'SIM marcado' if esgoto_sim else 'NÃO marcado'}")
-
-
-def _inserir_assinatura_excel(xlsx_path: str, img_path: str, log=None):
-    """
-    Insere imagem de assinatura na região AE-AH rows 73-76 (acima de Nome/CPF/CREA).
-    Usa openpyxl Image após reabrir o arquivo.
-    """
-    import os
-    from openpyxl import load_workbook
-    from openpyxl.drawing.image import Image as XLImage
-    from openpyxl.utils import get_column_letter
-
-    if not img_path or not os.path.exists(img_path):
-        if log:
-            log(f"⚠ Assinatura não encontrada: {img_path}")
-        return
+    _log("Abrindo Excel via COM...")
+    excel = comtypes.client.CreateObject("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
 
     try:
-        wb = load_workbook(xlsx_path)
-        ws = wb["ElemConstrutivos"]
-        img = XLImage(img_path)
-        img.width  = 120
-        img.height = 45
-        img.anchor = "AE73"
-        ws.add_image(img)
-        wb.save(xlsx_path)
-        if log:
-            log("Assinatura inserida no Excel.")
+        wb = excel.Workbooks.Open(os.path.abspath(template_path))
+        ws = wb.Worksheets("ElemConstrutivos")
+        _log("Excel aberto com sucesso.")
+
+        # ── Preencher células ──
+        _log("Preenchendo células...")
+        mapa = {
+            "G40":  dados.get("contratante", ""),
+            "G43":  dados.get("engenheiro_nome", ""),
+            "AH43": dados.get("crea", ""),
+            "AP43": "GO",
+            "AR43": dados.get("cpf", ""),
+            "G47":  dados.get("logradouro", ""),
+            "AJ47": dados.get("quadra_lote", ""),
+            "G49":  dados.get("bairro", ""),
+            "V49":  dados.get("cep", ""),
+            "AA49": dados.get("cidade", ""),
+            "AU49": dados.get("uf", ""),
+            "H53":  dados.get("engenheiro_nome", ""),
+            "Y54":  dados.get("art", ""),
+            "H75":  f"GOIÂNIA, {formatar_data_hoje()}",
+            "AE77": dados.get("engenheiro_nome", ""),
+            "AE78": dados.get("cpf", ""),
+            "AE79": dados.get("crea", ""),
+        }
+        for coord, valor in mapa.items():
+            ws.Range(coord).Value = valor
+
+        # ── Checkboxes de esgoto via shapes ──
+        _log(f"Configurando checkbox esgoto → {'SIM' if esgoto_sim else 'NÃO'}...")
+        for shape in ws.Shapes:
+            nome = shape.Name
+            if nome == SHAPE_ESGOTO_SIM:
+                # SIM marcado = Fill.ForeColor preto + Fill.Visible
+                if esgoto_sim:
+                    shape.Fill.ForeColor.RGB = 0x000000
+                    shape.Fill.Solid()
+                else:
+                    shape.Fill.Visible = 0   # msoFalse = 0
+            elif nome == SHAPE_ESGOTO_NAO:
+                if not esgoto_sim:
+                    shape.Fill.ForeColor.RGB = 0x000000
+                    shape.Fill.Solid()
+                else:
+                    shape.Fill.Visible = 0
+
+        # ── Inserir assinatura ──
+        if assinatura_path and os.path.exists(assinatura_path):
+            _log("Inserindo assinatura no Excel...")
+            try:
+                # Posição em pontos: col AE ≈ 1420pt, row 73 ≈ 960pt
+                cel = ws.Range("AE73")
+                left = cel.Left
+                top  = cel.Top
+                ws.Shapes.AddPicture(
+                    os.path.abspath(assinatura_path),
+                    0,      # LinkToFile = False
+                    1,      # SaveWithDocument = True
+                    left, top, 120, 45
+                )
+                _log("Assinatura inserida.")
+            except Exception as e:
+                _log(f"⚠ Assinatura Excel: {e}")
+        else:
+            _log("⚠ Assinatura não encontrada — pulando.")
+
+        # ── Salvar como .xlsx ──
+        _log(f"Salvando Excel: {Path(xlsx_saida).name}")
+        wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)  # 51 = xlOpenXMLWorkbook
+
+        # ── Exportar PDF (1 página) ──
+        _log(f"Exportando PDF: {Path(pdf_saida).name}")
+        ws.PageSetup.Zoom = False
+        ws.PageSetup.FitToPagesWide = 1
+        ws.PageSetup.FitToPagesTall = 1
+        ws.ExportAsFixedFormat(0, os.path.abspath(pdf_saida), 1, True, False)
+
+        wb.Close(False)
+        _log("✓ Excel concluído.")
+
     except Exception as e:
-        if log:
-            log(f"⚠ Erro ao inserir assinatura Excel: {e}")
+        try:
+            wb.Close(False)
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            excel.Quit()
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════
@@ -513,37 +454,6 @@ def exportar_word_pdf(docx_path: str, pdf_path: str, log=None):
             log(f"✗ Erro ao exportar Word PDF: {e}")
         raise
 
-
-def exportar_excel_pdf(xlsx_path: str, pdf_path: str, log=None):
-    """Exporta .xlsx para .pdf via Excel COM automation (1 página)."""
-    try:
-        import comtypes.client
-        excel = comtypes.client.CreateObject("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        wb = excel.Workbooks.Open(os.path.abspath(xlsx_path))
-        ws = wb.Worksheets("ElemConstrutivos")
-
-        # Forçar escala para caber em 1 página
-        ws.PageSetup.Zoom = False
-        ws.PageSetup.FitToPagesWide = 1
-        ws.PageSetup.FitToPagesTall = 1
-
-        ws.ExportAsFixedFormat(
-            0,                          # 0 = xlTypePDF
-            os.path.abspath(pdf_path),
-            1,                          # 1 = xlQualityStandard
-            True,                       # IncludeDocProperties
-            False,                      # IgnorePrintAreas
-        )
-        wb.Close(False)
-        excel.Quit()
-        if log:
-            log(f"PDF Excel gerado: {Path(pdf_path).name}")
-    except Exception as e:
-        if log:
-            log(f"✗ Erro ao exportar Excel PDF: {e}")
-        raise
 
 
 # ══════════════════════════════════════════════
@@ -608,12 +518,12 @@ def processar(params: dict, step_cb=None, log=None):
             dados_para_doc, esgoto_sim, log=_log
         )
 
-        # ── Excel ──
+        # ── Excel + PDF Excel (sessão COM única) ──
         step_atual += 1
         pct = int(step_atual / total_steps * 100)
-        _step(pct, f"Casa {num}: preenchendo Memorial...")
-        preencher_excel(
-            excel_template, xlsx_out,
+        _step(pct, f"Casa {num}: preenchendo Memorial e exportando PDF...")
+        preencher_excel_e_exportar_pdf(
+            excel_template, xlsx_out, pdf_mem,
             dados_para_doc, esgoto_sim, assinatura_path, log=_log
         )
 
@@ -623,11 +533,8 @@ def processar(params: dict, step_cb=None, log=None):
         _step(pct, f"Casa {num}: exportando Declaração ART para PDF...")
         exportar_word_pdf(docx_out, pdf_decl, log=_log)
 
-        # ── PDF Excel ──
-        step_atual += 1
-        pct = int(step_atual / total_steps * 100)
-        _step(pct, f"Casa {num}: exportando Memorial para PDF...")
-        exportar_excel_pdf(xlsx_out, pdf_mem, log=_log)
+        # (PDF Excel já gerado acima)
+        step_atual += 1  # manter contagem
 
         _log(f"✓ Casa {num} concluída.")
 
@@ -644,7 +551,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("Morais Engenharia — Preenchimento de Documentos")
         self.configure(bg=COR["bg"])
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(560, 480)
 
         self._assinatura_dir = ""  # pasta onde estão as imagens de assinatura
         self._campos_ruas = []     # widgets dinâmicos de rua por casa
@@ -657,24 +565,47 @@ class App(tk.Tk):
     # ──────────────────────────────────────────
 
     def _build_ui(self):
-        PAD = 14
+        PAD = 12
 
-        # ── Cabeçalho ──
-        hdr = tk.Frame(self, bg="#162030", pady=10)
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="MORAIS ENGENHARIA", font=("Segoe UI", 15, "bold"),
+        # ── Cabeçalho fixo ──
+        hdr = tk.Frame(self, bg="#162030", pady=8)
+        hdr.pack(fill="x", side="top")
+        tk.Label(hdr, text="MORAIS ENGENHARIA", font=("Segoe UI", 14, "bold"),
                  bg="#162030", fg=COR["texto"]).pack()
         tk.Label(hdr, text="Preenchimento Automático de Documentos",
                  font=("Segoe UI", 9), bg="#162030", fg=COR["subtexto"]).pack()
 
-        # ── Corpo principal ──
-        corpo = tk.Frame(self, bg=COR["bg"])
-        corpo.pack(fill="both", padx=PAD, pady=PAD)
+        # ── Scrollbar + Canvas ──
+        vsb = tk.Scrollbar(self, orient="vertical")
+        vsb.pack(side="right", fill="y")
 
-        col_esq = tk.Frame(corpo, bg=COR["bg"])
-        col_dir = tk.Frame(corpo, bg=COR["bg"])
-        col_esq.pack(side="left", fill="both", padx=(0, 8))
-        col_dir.pack(side="left", fill="both")
+        self._canvas = tk.Canvas(self, bg=COR["bg"], highlightthickness=0,
+                                 yscrollcommand=vsb.set)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        vsb.config(command=self._canvas.yview)
+
+        # Frame interno rolável
+        inner = tk.Frame(self._canvas, bg=COR["bg"])
+        self._inner_id = self._canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        inner.bind("<Configure>",
+                   lambda e: self._canvas.configure(
+                       scrollregion=self._canvas.bbox("all")))
+        self._canvas.bind("<Configure>",
+                          lambda e: self._canvas.itemconfig(
+                              self._inner_id, width=e.width))
+        self._canvas.bind_all("<MouseWheel>",
+                              lambda e: self._canvas.yview_scroll(
+                                  int(-1*(e.delta/120)), "units"))
+
+        # ── Duas colunas com pack horizontal ──
+        row = tk.Frame(inner, bg=COR["bg"])
+        row.pack(fill="both", expand=True, padx=PAD, pady=PAD)
+
+        col_esq = tk.Frame(row, bg=COR["bg"])
+        col_dir = tk.Frame(row, bg=COR["bg"])
+        col_esq.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        col_dir.pack(side="left", fill="both", expand=True)
 
         # ══ COLUNA ESQUERDA ══
 
@@ -690,7 +621,7 @@ class App(tk.Tk):
         self.var_eng = tk.StringVar()
         combo = ttk.Combobox(col_esq, textvariable=self.var_eng,
                              values=list(ENGENHEIROS.keys()),
-                             state="readonly", width=44)
+                             state="readonly", width=40)
         combo.pack(fill="x", pady=(0, 6))
         combo.bind("<<ComboboxSelected>>", self._on_eng_select)
 
@@ -700,16 +631,16 @@ class App(tk.Tk):
         # Dados da ART
         self._secao(col_esq, "DADOS DA ART")
         campos_art = [
-            ("Número da ART {1}:",        "art"),
+            ("Número da ART {1}:",           "art"),
             ("Número de Registro CREA {2}:", "crea"),
-            ("Contratante {4}:",           "contratante"),
-            ("Logradouro da Obra {5}:",    "logradouro"),
-            ("Quadra e Lote {6}:",         "quadra_lote"),
-            ("Bairro {7}:",                "bairro"),
-            ("Complemento {9}:",           "complemento"),
-            ("CEP {8}:",                   "cep"),
-            ("Cidade {10}:",               "cidade"),
-            ("UF {11}:",                   "uf"),
+            ("Contratante {4}:",             "contratante"),
+            ("Logradouro da Obra {5}:",      "logradouro"),
+            ("Quadra e Lote {6}:",           "quadra_lote"),
+            ("Bairro {7}:",                  "bairro"),
+            ("Complemento {9}:",             "complemento"),
+            ("CEP {8}:",                     "cep"),
+            ("Cidade {10}:",                 "cidade"),
+            ("UF {11}:",                     "uf"),
         ]
         self.vars_art = {}
         for label, key in campos_art:
@@ -742,21 +673,9 @@ class App(tk.Tk):
         spn.pack(side="left", padx=6)
         spn.bind("<FocusOut>", lambda e: self._on_qtd_casas_change())
 
-        # Painel dinâmico de ruas por casa
-        self._secao(col_dir, "RUAS POR CASA (esquina c/ ruas diferentes)")
-        self.frm_ruas = tk.Frame(col_dir, bg=COR["bg"])
-        self.frm_ruas.pack(fill="x")
-        self.lbl_ruas_hint = tk.Label(
-            self.frm_ruas,
-            text="(Ativo apenas quando 'Lote de esquina' +\n casas em ruas diferentes)",
-            bg=COR["bg"], fg=COR["subtexto"], font=("Segoe UI", 8)
-        )
-        self.lbl_ruas_hint.pack()
-
         # Esquina — mesma rua?
         self.var_mesma_rua = tk.BooleanVar(value=True)
         self.frm_esquina_opt = tk.Frame(col_dir, bg=COR["bg"])
-        self.frm_esquina_opt.pack(fill="x", pady=(2, 0))
         self.rb_mesma = tk.Radiobutton(
             self.frm_esquina_opt, text="Todas as casas na mesma rua",
             variable=self.var_mesma_rua, value=True,
@@ -771,17 +690,34 @@ class App(tk.Tk):
         )
         self.rb_mesma.pack(anchor="w")
         self.rb_dif.pack(anchor="w")
-        self.frm_esquina_opt.pack_forget()  # oculto até marcar esquina
+        # Oculto até marcar esquina
+        self.frm_esquina_opt.pack_forget()
+
+        # Painel dinâmico de ruas por casa
+        self._secao(col_dir, "RUAS POR CASA (esquina c/ ruas diferentes)")
+        self.frm_ruas = tk.Frame(col_dir, bg=COR["bg"])
+        self.frm_ruas.pack(fill="x")
+        self.lbl_ruas_hint = tk.Label(
+            self.frm_ruas,
+            text="(Ativo quando 'Lote de esquina' + ruas diferentes)",
+            bg=COR["bg"], fg=COR["subtexto"], font=("Segoe UI", 8)
+        )
+        self.lbl_ruas_hint.pack()
 
         # Log
         self._secao(col_dir, "LOG DE EXECUÇÃO")
+        log_frame = tk.Frame(col_dir, bg=COR["bg_log"])
+        log_frame.pack(fill="x")
         self.txt_log = tk.Text(
-            col_dir, height=10, width=52,
+            log_frame, height=9, width=44,
             bg=COR["bg_log"], fg=COR["log"],
             font=("Consolas", 8), relief="flat",
             state="disabled"
         )
-        self.txt_log.pack(fill="x")
+        sb_log = tk.Scrollbar(log_frame, command=self.txt_log.yview)
+        self.txt_log.configure(yscrollcommand=sb_log.set)
+        self.txt_log.pack(side="left", fill="both", expand=True)
+        sb_log.pack(side="right", fill="y")
 
         # Barra de progresso
         self._secao(col_dir, "PROGRESSO")
@@ -789,7 +725,7 @@ class App(tk.Tk):
                                  bg=COR["bg"], fg=COR["subtexto"],
                                  font=("Segoe UI", 8))
         self.lbl_prog.pack(anchor="w")
-        self.pb = ttk.Progressbar(col_dir, length=380, mode="determinate")
+        self.pb = ttk.Progressbar(col_dir, length=360, mode="determinate")
         self.pb.pack(fill="x", pady=(2, 8))
 
         style = ttk.Style()
@@ -876,11 +812,14 @@ class App(tk.Tk):
 
     def _centralizar(self):
         self.update_idletasks()
-        w = self.winfo_reqwidth()
-        h = self.winfo_reqheight()
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        # Tamanho inicial: 90% da tela, máximo 1100x750
+        w = min(int(sw * 0.90), 1100)
+        h = min(int(sh * 0.88), 750)
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     # ──────────────────────────────────────────
     # EVENTOS
