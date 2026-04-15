@@ -29,6 +29,14 @@ jobs:
             --hidden-import comtypes.client `
             --hidden-import PIL._imaging `
             --hidden-import PIL.Image `
+            --hidden-import docx `
+            --hidden-import docx.oxml `
+            --hidden-import docx.oxml.ns `
+            --hidden-import openpyxl `
+            --hidden-import openpyxl.styles `
+            --hidden-import openpyxl.drawing.image `
+            --collect-all docx `
+            --collect-all openpyxl `
             --collect-all lxml `
             app.py
 
