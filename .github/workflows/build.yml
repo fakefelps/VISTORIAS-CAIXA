@@ -24,6 +24,31 @@ jobs:
           pip install python-docx==1.1.0 openpyxl==3.1.2 pywin32==306 pillow==10.2.0 lxml==5.1.0 pytesseract==0.3.10 pymupdf==1.23.26 pyinstaller==6.3.0
 
       # ========================================================
+      # CORRIGIR ÍCONE — regenera icone.ico via Pillow
+      # Resolve: ValueError: Something went wrong converting icon image
+      # ========================================================
+      - name: Regenerar icone.ico via Pillow
+        shell: cmd
+        run: |
+          python -c "
+from PIL import Image
+import os
+
+src = 'icone.ico'
+dst = 'icone_fixed.ico'
+
+try:
+    img = Image.open(src).convert('RGBA')
+    sizes = [(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)]
+    frames = [img.resize(s, Image.LANCZOS) for s in sizes]
+    frames[0].save(dst, format='ICO', sizes=sizes, append_images=frames[1:])
+    print('Icone regenerado com sucesso:', dst)
+except Exception as e:
+    print('Falha ao regenerar icone, usando fallback sem icone:', e)
+    open(dst, 'wb').close()
+"
+
+      # ========================================================
       # INSTALAR TESSERACT (simplificado e robusto)
       # ========================================================
       - name: Instalar Tesseract via Chocolatey
@@ -64,7 +89,7 @@ jobs:
         run: |
           python -m PyInstaller --onefile --windowed ^
             --name "BercanProjetos" ^
-            --icon "icone.ico" ^
+            --icon "icone_fixed.ico" ^
             --add-data "assets;assets" ^
             --hidden-import win32com.client ^
             --hidden-import win32com.server.util ^
