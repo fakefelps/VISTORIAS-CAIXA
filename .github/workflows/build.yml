@@ -17,22 +17,20 @@ jobs:
           python-version: "3.11"
 
       - name: Instalar dependencias Python
-        run: |
-          pip install python-docx openpyxl pywin32 pillow lxml pyinstaller pytesseract pymupdf
+        run: pip install python-docx openpyxl pywin32 pillow lxml pyinstaller pytesseract pymupdf
 
-      - name: Baixar e configurar Tesseract OCR
+      - name: Instalar Tesseract via Chocolatey
         shell: powershell
         run: |
-          $url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20231005/tesseract-ocr-w64-setup-5.3.3.20231005.exe"
-          $out = "tesseract-installer.exe"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          Start-Process -FilePath $out -ArgumentList "/S", "/D=C:\Tesseract" -Wait
+          choco install tesseract --yes --no-progress
+          $tessDir = "C:\Program Files\Tesseract-OCR"
           New-Item -ItemType Directory -Force -Path "assets\tesseract\tessdata" | Out-Null
-          Copy-Item "C:\Tesseract\tesseract.exe" "assets\tesseract\tesseract.exe"
-          Get-ChildItem "C:\Tesseract\*.dll" | Copy-Item -Destination "assets\tesseract\"
-          Copy-Item "C:\Tesseract\tessdata\por.traineddata" "assets\tesseract\tessdata\por.traineddata"
-          Copy-Item "C:\Tesseract\tessdata\eng.traineddata" "assets\tesseract\tessdata\eng.traineddata"
-          Write-Host "Tesseract configurado com sucesso."
+          Copy-Item "$tessDir\tesseract.exe" "assets\tesseract\tesseract.exe"
+          Get-ChildItem "$tessDir\*.dll" | Copy-Item -Destination "assets\tesseract\"
+          # Baixar traineddata português via pip (tessdata)
+          python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/tesseract-ocr/tessdata/raw/main/por.traineddata', 'assets/tesseract/tessdata/por.traineddata')"
+          python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata', 'assets/tesseract/tessdata/eng.traineddata')"
+          Write-Host "Tesseract OK"
 
       - name: Gerar EXE
         run: |
