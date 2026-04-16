@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 BERÇAN PROJETOS — Preenchimento Automático de Documentos CAIXA
-Versão 4.2 — Abril/2026
+Versão 4.4 — Abril/2026
 
 Correções v4 (original):
 - Assinatura Memorial (Excel) via win32com com qualidade preservada (+50% tamanho)
@@ -792,33 +792,7 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
                 except Exception as e:
                     if log:
                         log(f"  ⚠ Célula {coord} falhou: {e}")
-        else:
-            # Modo não mapeado — detectar azul via openpyxl
-            if log:
-                log("  • Modo Não Mapeado: detectando células azuis...")
-            coords_azuis = _detectar_celulas_azuis_openpyxl(template_path)
-            if log:
-                log(f"  • {len(coords_azuis)} células azuis detectadas")
-            # Preenche pela ordem com os valores disponíveis
-            valores_ord = [
-                dados.get("contratante", ""),
-                dados.get("engenheiro_nome", ""),
-                dados.get("crea", ""),
-                dados.get("cpf", ""),
-                dados.get("logradouro", ""),
-                f"{dados.get('quadra_lote', '')}   CASA {num_casa}",
-                dados.get("bairro", ""),
-                dados.get("cep", ""),
-                dados.get("cidade", ""),
-                dados.get("uf", ""),
-                dados.get("art", ""),
-            ]
-            for coord, val in zip(coords_azuis, valores_ord):
-                try:
-                    ws.Range(coord).Value = val
-                except Exception as e:
-                    if log:
-                        log(f"  ⚠ Célula {coord} falhou: {e}")
+
 
         # ===================================================================
         # CHECKBOXES: feito APÓS salvar (fora do win32com)
@@ -1324,23 +1298,6 @@ class App(tk.Tk):
         self.var_memorial = tk.StringVar()
         self._campo_arquivo(col_esq, self.var_memorial, "Arquivo Memorial (.xls/.xlsx)")
 
-        self._secao_label(col_esq, "MODO DO MEMORIAL")
-        self.var_modo = tk.StringVar(value="mapeado")
-        frame_modo = tk.Frame(col_esq, bg=COR_FUNDO)
-        frame_modo.pack(anchor="w", pady=5)
-        tk.Radiobutton(
-            frame_modo, text="Mapeado (com {N})",
-            variable=self.var_modo, value="mapeado",
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
-        ).pack(side="left", padx=(0, 15))
-        tk.Radiobutton(
-            frame_modo, text="Não mapeado (detectar azul)",
-            variable=self.var_modo, value="nao_mapeado",
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
-        ).pack(side="left")
-
         self._secao_label(col_esq, "ENGENHEIRO RESPONSÁVEL")
         self.var_engenheiro = tk.StringVar()
         combo_eng = ttk.Combobox(
@@ -1628,6 +1585,7 @@ class App(tk.Tk):
     # Thread de processamento
     # ------------------------------------------------------------------
     def _processar(self):
+        template_excel_temp = None  # inicializado antes do try para o finally
         try:
             eng_nome = self.var_engenheiro.get()
             eng_info = ENGENHEIROS[eng_nome]
@@ -1654,10 +1612,21 @@ class App(tk.Tk):
             }
 
             esgoto_sim = self.var_esgoto.get()
-            modo_mapeado = (self.var_modo.get() == "mapeado")
-            modo_checkbox = self.var_modo_checkbox.get()   # NOVO v4
+            modo_checkbox = self.var_modo_checkbox.get()
+            modo_mapeado = True  # sempre modo mapeado (não mapeado removido)
             qtd = self.var_qtd_casas.get()
-            template_excel = self.var_memorial.get()
+            template_excel_orig = self.var_memorial.get()
+
+            # Converter .xls → .xlsx UMA VEZ antes do loop.
+            # Evita múltiplas instâncias Excel simultâneas (causa de travamento).
+            if template_excel_orig.lower().endswith(".xls"):
+                self.log("• Convertendo template .xls → .xlsx (uma vez)...")
+                template_excel, criou_temp_tpl = _xls_para_xlsx_temp(template_excel_orig)
+                if criou_temp_tpl:
+                    template_excel_temp = template_excel
+                self.log(f"  ✓ Template convertido")
+            else:
+                template_excel = template_excel_orig
 
             # Pasta destino
             data_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -1740,6 +1709,12 @@ class App(tk.Tk):
             self._set_status("Erro.")
             self.after(0, lambda: messagebox.showerror("Erro", str(e)))
         finally:
+            # Limpar temp do template se criado
+            try:
+                if template_excel_temp and os.path.exists(template_excel_temp):
+                    os.unlink(template_excel_temp)
+            except Exception:
+                pass
             self.processando = False
             self.stop_event.clear()
             self.after(0, lambda: self.btn_gerar.configure(state="normal"))
