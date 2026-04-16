@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 BERÇAN PROJETOS — Preenchimento Automático de Documentos CAIXA
-Versão 4.1 — Abril/2026
+Versão 4.2 — Abril/2026
 
 Correções v4 (original):
 - Assinatura Memorial (Excel) via win32com com qualidade preservada (+50% tamanho)
@@ -11,6 +11,13 @@ Correções v4 (original):
 - Bug do Modo Não Mapeado (float & int) corrigido
 - Pasta destino renomeada: DOCUMENTOS DE VISTORIA
 - Botão INTERROMPER processamento (threading.Event)
+
+Correções v4.2:
+- Assinatura Word: âncora dinâmica no parágrafo ____ (detectado automaticamente)
+- Assinatura Word: posOffset -457200 EMU (0,5cm acima da linha de assinatura)
+- Excel COM: xl.Visible/DisplayAlerts envolvidos em try/except (fix AttributeError)
+- UI: botão LER ART e campo PDF removidos (OCR descartado)
+- UF: campo mantido com padrão GO
 
 Correções v4.1:
 - CHECKBOX_ANCORA_CELULA corrigida de AR55 → AM70 (posição real no drawing XML)
@@ -359,19 +366,44 @@ def _sub_paragrafo(para, placeholder, valor):
     return True
 
 
-def _inserir_assinatura_word(doc, img_path, linha_idx, log=None):
+def _detectar_paragrafo_assinatura(doc):
+    """
+    Detecta o índice do parágrafo de assinatura no template Word.
+    Estratégia: procura o parágrafo que contém apenas underscores (____),
+    que é a linha de assinatura em ambos os templates (FOSSA e ESGOTO).
+    Fallback: usa o penúltimo parágrafo antes de "RT:".
+    Retorna o índice do parágrafo encontrado.
+    """
+    paras = doc.paragraphs
+    # Passo 1: procurar linha de underscores
+    for i, p in enumerate(paras):
+        txt = p.text.strip()
+        if txt and all(c in ('_', ' ') for c in txt) and len(txt) >= 5:
+            return i
+
+    # Passo 2: procurar parágrafo com "RT:" e voltar 2 posições
+    for i, p in enumerate(paras):
+        if p.text.strip().startswith("RT:"):
+            return max(0, i - 2)
+
+    # Fallback: penúltimo parágrafo
+    return max(0, len(paras) - 2)
+
+
+def _inserir_assinatura_word(doc, img_path, linha_idx=None, log=None):
     """
     Insere a assinatura como imagem FLUTUANTE (behind text) no Word.
-    Não desloca parágrafos — fica atrás do texto.
+    Ancora dinamicamente no parágrafo com ____ (linha de assinatura).
+    linha_idx ignorado — mantido apenas por compatibilidade.
     """
     if not os.path.exists(img_path):
         if log:
             log(f"⚠ Assinatura não encontrada: {img_path}")
         return
 
-    idx = max(0, linha_idx - 1)
-    if idx >= len(doc.paragraphs):
-        idx = len(doc.paragraphs) - 1
+    idx = _detectar_paragrafo_assinatura(doc)
+    if log:
+        log(f"  • Assinatura ancorada no parágrafo [{idx}]: {repr(doc.paragraphs[idx].text[:40])}")
 
     target = doc.paragraphs[idx]
     run = target.add_run()
@@ -408,7 +440,7 @@ def _inserir_assinatura_word(doc, img_path, linha_idx, log=None):
             <wp:posOffset>0</wp:posOffset>
         </wp:positionH>
         <wp:positionV relativeFrom="paragraph">
-            <wp:posOffset>-685800</wp:posOffset>
+            <wp:posOffset>-457200</wp:posOffset>
         </wp:positionV>
         <wp:extent cx="{cx}" cy="{cy}"/>
         <wp:effectExtent l="0" t="0" r="0" b="0"/>
@@ -717,9 +749,12 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
     wb = None
     try:
         xl = win32com.client.Dispatch("Excel.Application")
-        xl.Visible = False
-        xl.DisplayAlerts = False
-        xl.ScreenUpdating = False
+        try: xl.Visible = False
+        except Exception: pass
+        try: xl.DisplayAlerts = False
+        except Exception: pass
+        try: xl.ScreenUpdating = False
+        except Exception: pass
 
         wb = xl.Workbooks.Open(os.path.abspath(template_path))
 
@@ -884,8 +919,10 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
         wb = None
         try:
             xl = win32com.client.Dispatch("Excel.Application")
-            xl.Visible = False
-            xl.DisplayAlerts = False
+            try: xl.Visible = False
+            except Exception: pass
+            try: xl.DisplayAlerts = False
+            except Exception: pass
             wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
             try:
                 ws = wb.Worksheets("ElemConstrutivos")
@@ -928,8 +965,10 @@ def _excel_para_pdf(xlsx_path, pdf_path, log=None):
     wb = None
     try:
         xl = win32com.client.Dispatch("Excel.Application")
-        xl.Visible = False
-        xl.DisplayAlerts = False
+        try: xl.Visible = False
+        except Exception: pass
+        try: xl.DisplayAlerts = False
+        except Exception: pass
         wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
 
         try:
@@ -973,8 +1012,10 @@ def _word_para_pdf(docx_path, pdf_path, log=None):
     doc = None
     try:
         word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        word.DisplayAlerts = False
+        try: word.Visible = False
+        except Exception: pass
+        try: word.DisplayAlerts = False
+        except Exception: pass
         doc = word.Documents.Open(os.path.abspath(docx_path))
         # 17 = wdFormatPDF
         doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
@@ -1316,26 +1357,6 @@ class App(tk.Tk):
         self._campo_simples(col_esq, self.var_crea, "CREA")
 
         self._secao_label(col_esq, "DADOS DA ART")
-        self.var_art_pdf = tk.StringVar()
-        frame_art = tk.Frame(col_esq, bg=COR_FUNDO)
-        frame_art.pack(fill="x", pady=3)
-        tk.Entry(
-            frame_art, textvariable=self.var_art_pdf,
-            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
-            relief="flat", font=("Segoe UI", 9),
-        ).pack(side="left", fill="x", expand=True)
-        tk.Button(
-            frame_art, text="📎 Selecionar",
-            command=lambda: self._selecionar_arquivo(self.var_art_pdf, [("PDF", "*.pdf")]),
-            bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(5, 0))
-        tk.Button(
-            frame_art, text="🔍 LER ART",
-            command=self._acionar_ocr,
-            bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(5, 0))
 
         self.var_art = tk.StringVar()
         self._campo_simples(col_esq, self.var_art, "Número da ART")
