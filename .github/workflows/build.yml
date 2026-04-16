@@ -1,4 +1,4 @@
-name: Gerar EXE - BERCAN Projetos
+name: Gerar EXE - BERCAN Projetos v3
 
 on:
   push:
@@ -40,7 +40,6 @@ jobs:
             --hidden-import openpyxl.styles `
             --hidden-import openpyxl.drawing.image `
             --hidden-import pytesseract `
-            --hidden-import fitz `
             --collect-all win32com `
             --collect-all docx `
             --collect-all openpyxl `
