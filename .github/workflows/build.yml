@@ -30,23 +30,19 @@ jobs:
       - name: Regenerar icone.ico via Pillow
         shell: cmd
         run: |
-          python -c "
-from PIL import Image
-import os
-
-src = 'icone.ico'
-dst = 'icone_fixed.ico'
-
-try:
-    img = Image.open(src).convert('RGBA')
-    sizes = [(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)]
-    frames = [img.resize(s, Image.LANCZOS) for s in sizes]
-    frames[0].save(dst, format='ICO', sizes=sizes, append_images=frames[1:])
-    print('Icone regenerado com sucesso:', dst)
-except Exception as e:
-    print('Falha ao regenerar icone, usando fallback sem icone:', e)
-    open(dst, 'wb').close()
-"
+          echo from PIL import Image > fix_icon.py
+          echo src = "icone.ico" >> fix_icon.py
+          echo dst = "icone_fixed.ico" >> fix_icon.py
+          echo try: >> fix_icon.py
+          echo     img = Image.open(src).convert("RGBA") >> fix_icon.py
+          echo     sizes = [(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)] >> fix_icon.py
+          echo     frames = [img.resize(s, Image.LANCZOS) for s in sizes] >> fix_icon.py
+          echo     frames[0].save(dst, format="ICO", sizes=sizes, append_images=frames[1:]) >> fix_icon.py
+          echo     print("Icone regenerado:", dst) >> fix_icon.py
+          echo except Exception as e: >> fix_icon.py
+          echo     print("Fallback sem icone:", e) >> fix_icon.py
+          echo     open(dst, "wb").close() >> fix_icon.py
+          python fix_icon.py
 
       # ========================================================
       # INSTALAR TESSERACT (simplificado e robusto)
