@@ -74,9 +74,14 @@ CHECKBOX_SEM_ESGOTO_IMG = "CHECKBOX_SEM_ESGOTO.png"
 # 1 cm ≈ 28.35 pontos. Ajuste essas constantes se precisar reposicionar.
 CHECKBOX_ANCORA_CELULA = "AR55"   # célula âncora (canto superior-esquerdo da imagem)
 CHECKBOX_OFFSET_X_PT = 0          # desloca horizontalmente (+ direita / - esquerda)
-CHECKBOX_OFFSET_Y_PT = 0          # desloca verticalmente (+ baixo / - cima)
+CHECKBOX_OFFSET_Y_PT = 0          # desloca vertical (+ baixo / - cima)
 CHECKBOX_LARGURA_PT = 70          # largura da imagem em pontos
 CHECKBOX_ALTURA_PT = 240          # altura da imagem em pontos
+
+# ----- Checkboxes nativos do Excel (shapes existentes no template) -----
+# Nomes dos shapes dentro de xl/drawings/drawing1.xml
+SHAPE_ESGOTO_SIM = "QO012,12.L0C0;L0C-34^"
+SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
 
 # ----- Assinatura Word (DECLARAÇÃO) — +50% v4 -----
 # Antes: Inches(1.8). Agora: Inches(2.7) — aumento proporcional de 50%.
@@ -423,11 +428,136 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
     return shape
 
 
+def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None):
+    """
+    Marca os checkboxes nativos do Excel manipulando diretamente o XML dos shapes.
+    Usa lxml (preserva namespaces) para evitar corrupção do arquivo.
+
+    Retorna True se conseguiu marcar com sucesso, False caso contrário.
+    """
+    import tempfile
+
+    try:
+        # .xlsx é um ZIP — vamos abrir, modificar drawing1.xml, fechar
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(tmp_fd)
+        shutil.copy2(xlsx_path, tmp_path)
+
+        shapes_encontrados = 0
+
+        with zipfile.ZipFile(tmp_path, "r") as zi, \
+             zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
+
+            for item in zi.infolist():
+                data = zi.read(item.filename)
+
+                # Procuramos em todos os drawing*.xml (pode haver mais de um)
+                if item.filename.startswith("xl/drawings/drawing") and \
+                   item.filename.endswith(".xml"):
+                    try:
+                        root = etree.fromstring(data)
+
+                        # Mapear namespaces para busca
+                        nsmap = {
+                            'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+                            'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                        }
+
+                        # Percorrer todos os shapes
+                        for sp in root.iter('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}sp'):
+                            # Nome do shape em xdr:nvSpPr/xdr:cNvPr/@name
+                            cnv_pr = sp.find('.//xdr:nvSpPr/xdr:cNvPr', nsmap)
+                            if cnv_pr is None:
+                                continue
+                            nome = cnv_pr.get('name', '')
+
+                            # Determinar qual cor aplicar
+                            cor = None
+                            if nome == SHAPE_ESGOTO_SIM:
+                                cor = "000000" if esgoto_sim else "FFFFFF"
+                            elif nome == SHAPE_ESGOTO_NAO:
+                                cor = "000000" if not esgoto_sim else "FFFFFF"
+
+                            if cor is None:
+                                continue
+
+                            shapes_encontrados += 1
+
+                            # Buscar o solidFill dentro do shape e modificar a cor
+                            # Estrutura: xdr:sp/xdr:spPr/a:solidFill/a:srgbClr
+                            sp_pr = sp.find('.//xdr:spPr', nsmap)
+                            if sp_pr is None:
+                                continue
+
+                            # Remover fills existentes para aplicar novo limpo
+                            for fill_type in ['a:solidFill', 'a:noFill', 'a:gradFill']:
+                                existing = sp_pr.find(fill_type, nsmap)
+                                if existing is not None:
+                                    sp_pr.remove(existing)
+
+                            # Criar novo solidFill com a cor
+                            solid_fill = etree.SubElement(
+                                sp_pr,
+                                '{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill'
+                            )
+                            srgb_clr = etree.SubElement(
+                                solid_fill,
+                                '{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr'
+                            )
+                            srgb_clr.set('val', cor)
+
+                            # Reordenar: solidFill precisa vir em posição específica
+                            # dentro de spPr. Movemos para logo após xfrm se existir,
+                            # senão no início de spPr.
+                            sp_pr.remove(solid_fill)
+                            xfrm = sp_pr.find('a:xfrm', nsmap)
+                            if xfrm is not None:
+                                xfrm.addnext(solid_fill)
+                            else:
+                                sp_pr.insert(0, solid_fill)
+
+                        # Serializar com lxml (PRESERVA prefixos de namespace)
+                        data = etree.tostring(
+                            root,
+                            xml_declaration=True,
+                            encoding="UTF-8",
+                            standalone=True,
+                        )
+                    except Exception as e:
+                        if log:
+                            log(f"  ⚠ Erro ao processar {item.filename}: {e}")
+
+                zo.writestr(item, data)
+
+        os.unlink(tmp_path)
+
+        if shapes_encontrados == 0:
+            if log:
+                log("  ⚠ Shapes de checkbox NÃO encontrados no XML")
+            return False
+
+        if log:
+            log(f"  ✓ {shapes_encontrados} shape(s) de checkbox modificado(s) nativamente")
+        return True
+
+    except Exception as e:
+        if log:
+            log(f"  ✗ Falha no método nativo: {e}")
+        return False
+
+
 def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
-                     modo_mapeado, esgoto_sim, log=None):
+                     modo_mapeado, esgoto_sim, modo_checkbox="auto", log=None):
     """
     Preenche o Memorial Excel via win32com (nativo, preserva tudo).
-    Modo Mapeado = células fixas. Modo Não Mapeado = detecta azul automaticamente.
+
+    Args:
+        modo_mapeado: True = células fixas; False = detectar azul
+        esgoto_sim: True = sistema com esgoto público
+        modo_checkbox: "nativo" | "imagem" | "auto"
+            - nativo: manipula shapes existentes via XML (preserva visual original)
+            - imagem: sobrepõe PNG na posição (fallback confiável)
+            - auto: tenta nativo, se falhar usa imagem
     """
     pythoncom.CoInitialize()
     xl = None
@@ -503,30 +633,10 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
                         log(f"  ⚠ Célula {coord} falhou: {e}")
 
         # ===================================================================
-        # INSERIR CHECKBOXES COMO IMAGEM (NOVO v4)
+        # CHECKBOXES: feito APÓS salvar (fora do win32com)
+        # Isso porque o método nativo (XML) precisa do arquivo salvo,
+        # e o método imagem é mais simples de fazer num passo separado.
         # ===================================================================
-        img_checkbox = (CHECKBOX_COM_ESGOTO_IMG if esgoto_sim
-                       else CHECKBOX_SEM_ESGOTO_IMG)
-        img_checkbox_path = asset(img_checkbox)
-        if os.path.exists(img_checkbox_path):
-            try:
-                _inserir_imagem_excel_win32(
-                    ws,
-                    img_checkbox_path,
-                    CHECKBOX_ANCORA_CELULA,
-                    CHECKBOX_OFFSET_X_PT,
-                    CHECKBOX_OFFSET_Y_PT,
-                    CHECKBOX_LARGURA_PT,
-                    CHECKBOX_ALTURA_PT,
-                )
-                if log:
-                    log(f"  ✓ Checkboxes inseridos ({'COM' if esgoto_sim else 'SEM'} esgoto)")
-            except Exception as e:
-                if log:
-                    log(f"  ⚠ Falha ao inserir checkboxes: {e}")
-        else:
-            if log:
-                log(f"  ⚠ Imagem de checkbox não encontrada: {img_checkbox}")
 
         # ===================================================================
         # INSERIR ASSINATURA DO ENGENHEIRO (via win32com — qualidade preservada)
@@ -564,6 +674,89 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
             except Exception:
                 pass
         pythoncom.CoUninitialize()
+
+
+def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
+    """
+    Aplica a marcação de esgoto SIM/NÃO no Memorial.
+
+    modo_checkbox:
+        "nativo" — só tenta XML (se falhar, fica sem marcação)
+        "imagem" — só sobrepõe PNG
+        "auto"   — tenta nativo; se falhar, cai pra imagem
+
+    Retorna string com o método que funcionou: "nativo", "imagem" ou "nenhum".
+    """
+    metodo_usado = "nenhum"
+
+    # --- Tentar método NATIVO (se modo for nativo ou auto) ---
+    if modo_checkbox in ("nativo", "auto"):
+        if log:
+            log("  • Tentando checkboxes NATIVOS (XML)...")
+        if _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=log):
+            metodo_usado = "nativo"
+            if log:
+                log("  ✓ Checkboxes aplicados via método NATIVO")
+            if modo_checkbox == "nativo":
+                return metodo_usado
+            # Se for "auto" e nativo deu certo, PARA aqui (não sobrepõe imagem)
+            return metodo_usado
+        elif modo_checkbox == "nativo":
+            if log:
+                log("  ⚠ Método nativo falhou e modo é 'nativo' — sem marcação")
+            return metodo_usado
+
+    # --- Fallback / modo IMAGEM ---
+    if modo_checkbox in ("imagem", "auto"):
+        img_nome = CHECKBOX_COM_ESGOTO_IMG if esgoto_sim else CHECKBOX_SEM_ESGOTO_IMG
+        img_path = asset(img_nome)
+
+        if not os.path.exists(img_path):
+            if log:
+                log(f"  ⚠ Imagem de checkbox não encontrada: {img_nome}")
+            return metodo_usado
+
+        # Abre o xlsx via win32com só para sobrepor a imagem
+        pythoncom.CoInitialize()
+        xl = None
+        wb = None
+        try:
+            xl = win32com.client.Dispatch("Excel.Application")
+            xl.Visible = False
+            xl.DisplayAlerts = False
+            wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
+            try:
+                ws = wb.Worksheets("ElemConstrutivos")
+            except Exception:
+                ws = wb.Worksheets(1)
+
+            _inserir_imagem_excel_win32(
+                ws, img_path,
+                CHECKBOX_ANCORA_CELULA,
+                CHECKBOX_OFFSET_X_PT, CHECKBOX_OFFSET_Y_PT,
+                CHECKBOX_LARGURA_PT, CHECKBOX_ALTURA_PT,
+            )
+            wb.Save()
+            metodo_usado = "imagem"
+            if log:
+                log(f"  ✓ Checkboxes aplicados via IMAGEM ({'COM' if esgoto_sim else 'SEM'} esgoto)")
+        except Exception as e:
+            if log:
+                log(f"  ⚠ Falha ao inserir imagem de checkbox: {e}")
+        finally:
+            if wb is not None:
+                try:
+                    wb.Close(SaveChanges=False)
+                except Exception:
+                    pass
+            if xl is not None:
+                try:
+                    xl.Quit()
+                except Exception:
+                    pass
+            pythoncom.CoUninitialize()
+
+    return metodo_usado
 
 
 def _excel_para_pdf(xlsx_path, pdf_path, log=None):
@@ -1022,6 +1215,33 @@ class App(tk.Tk):
             bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8),
         ).pack(anchor="w", padx=20)
 
+        # Modo dos checkboxes (NOVO v4 — híbrido)
+        self._secao_label(col_dir, "MÉTODO DE MARCAÇÃO DOS CHECKBOXES")
+        self.var_modo_checkbox = tk.StringVar(value="auto")
+        frame_chk = tk.Frame(col_dir, bg=COR_FUNDO)
+        frame_chk.pack(anchor="w", pady=3)
+        tk.Radiobutton(
+            frame_chk, text="Auto (tenta nativo, fallback imagem)",
+            variable=self.var_modo_checkbox, value="auto",
+            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
+            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            frame_chk, text="Nativo (manipula shapes do Excel)",
+            variable=self.var_modo_checkbox, value="nativo",
+            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
+            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
+        tk.Radiobutton(
+            frame_chk, text="Imagem (sobrepõe PNG)",
+            variable=self.var_modo_checkbox, value="imagem",
+            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
+            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
+
         self.var_esquina = tk.BooleanVar(value=False)
         tk.Checkbutton(
             col_dir, text="Lote de esquina",
@@ -1252,6 +1472,7 @@ class App(tk.Tk):
 
             esgoto_sim = self.var_esgoto.get()
             modo_mapeado = (self.var_modo.get() == "mapeado")
+            modo_checkbox = self.var_modo_checkbox.get()   # NOVO v4
             qtd = self.var_qtd_casas.get()
             template_excel = self.var_memorial.get()
 
@@ -1297,8 +1518,18 @@ class App(tk.Tk):
                 xlsx_path = pasta_saida / f"MEMORIAL_{base_nome}.xlsx"
                 _excel_preencher(
                     template_excel, str(xlsx_path), dados, i,
-                    modo_mapeado, esgoto_sim, log=self.log,
+                    modo_mapeado, esgoto_sim, modo_checkbox=modo_checkbox,
+                    log=self.log,
                 )
+
+                # 3.5 Aplicar checkboxes (método híbrido — NOVO v4)
+                self._check_stop()
+                self.log(f"• Aplicando checkboxes (modo: {modo_checkbox})...")
+                _aplicar_checkboxes(
+                    str(xlsx_path), esgoto_sim,
+                    modo_checkbox=modo_checkbox, log=self.log,
+                )
+
                 etapa_atual += 1
                 self._set_progress(etapa_atual * 100 / total_etapas)
 
