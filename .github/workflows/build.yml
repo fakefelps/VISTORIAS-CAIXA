@@ -1,4 +1,4 @@
-name: Gerar EXE - PreencherDocumentos
+name: Gerar EXE - BERCAN Projetos
 
 on:
   push:
@@ -18,13 +18,14 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install python-docx openpyxl pywin32 pillow lxml pyinstaller
+          pip install python-docx openpyxl pywin32 pillow lxml pyinstaller pytesseract pymupdf
 
       - name: Gerar EXE
         run: |
           python -m PyInstaller --onefile --windowed `
-            --name "PreencherDocumentos" `
+            --name "BercanProjetos" `
             --icon "icone.ico" `
+            --add-data "assets;assets" `
             --hidden-import win32com.client `
             --hidden-import win32com.server.util `
             --hidden-import win32api `
@@ -38,6 +39,8 @@ jobs:
             --hidden-import openpyxl `
             --hidden-import openpyxl.styles `
             --hidden-import openpyxl.drawing.image `
+            --hidden-import pytesseract `
+            --hidden-import fitz `
             --collect-all win32com `
             --collect-all docx `
             --collect-all openpyxl `
@@ -46,6 +49,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PreencherDocumentos-Windows
-          path: dist/PreencherDocumentos.exe
+          name: BercanProjetos-Windows
+          path: dist/BercanProjetos.exe
           retention-days: 30
