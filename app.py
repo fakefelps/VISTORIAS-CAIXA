@@ -31,8 +31,8 @@ def asset(nome: str) -> str:
 ENGENHEIROS = {
     "FELIPE GUILHERME BERÇAN":          {"cpf":"147.849.107-86",  "crea":"1022722034D-GO", "assinatura":"FELIPE.png"},
     "CAIO ARAUJO BRAGA":                {"cpf":"011.309.411-67",  "crea":"CREA-GO",         "assinatura":"CAIO.png"},
-    "JOÃO VITOR CABRAL DE MORAIS":      {"cpf":"038.144.411-25",  "crea":"CREA-GO",         "assinatura":"JOAO_VITOR.jpg"},
-    "JULIO CESAR GOMES DE MORAIS FILHO":{"cpf":"033.865.821-17",  "crea":"CREA-GO",         "assinatura":"JULIO_CESAR.png"},
+    "JOÃO VITOR CABRAL DE MORAIS":      {"cpf":"038.144.411-25",  "crea":"CREA-GO",         "assinatura":"JOÃO VITOR.jpg"},
+    "JULIO CESAR GOMES DE MORAIS FILHO":{"cpf":"033.865.821-17",  "crea":"CREA-GO",         "assinatura":"JULIO CESAR.png"},
     "PAULA FLEURY DE MORAIS":           {"cpf":"033.813.881-18",  "crea":"CREA-GO",         "assinatura":"PAULA.png"},
     "ISAAC NATAN SANTOS":               {"cpf":"701.117.261-07",  "crea":"CREA-GO",         "assinatura":"ISAAC.png"},
 }
@@ -42,8 +42,8 @@ ENGENHEIROS = {
 # ══════════════════════════════════════════════
 
 # Templates Word embutidos
-TEMPLATE_FOSSA  = "TEMPLATE_FOSSA.docx"
-TEMPLATE_ESGOTO = "TEMPLATE_ESGOTO.docx"
+TEMPLATE_FOSSA  = "TEMPLETE PARA FOSSA.docx"
+TEMPLATE_ESGOTO = "TEMPLETE PARA ESGOTO.docx"
 
 # Estrutura do template FOSSA
 FOSSA_LINHA_ASS = 36   # parágrafo com ____
@@ -84,8 +84,41 @@ def formatar_data_hoje() -> str:
              "julho","agosto","setembro","outubro","novembro","dezembro"]
     return f"{h.day} de {meses[h.month-1]} de {h.year}"
 
-def criar_pasta_saida() -> str:
-    pasta = Path.home() / "Downloads" / "Bercan Projetos" / datetime.date.today().strftime("%Y-%m-%d")
+def criar_pasta_saida(logradouro="", quadra_lote="", casas=None) -> str:
+    """
+    Cria pasta em Downloads/Bercan Projetos/YYYY-MM-DD/ENDEREÇO.
+    Se esquina com ruas diferentes, usa a rua da primeira casa.
+    """
+    data = datetime.date.today().strftime("%Y-%m-%d")
+
+    # Montar nome da subpasta com endereço
+    logr = logradouro.strip()
+    for prefix in ["AVENIDA ","AV. ","AV ","RUA ","R. "]:
+        if logr.upper().startswith(prefix):
+            logr = logr[len(prefix):]
+            break
+
+    # Se houver casas com ruas diferentes, usar rua da casa 1
+    if casas and len(casas) > 0:
+        rua_casa1 = casas[0].get("logradouro","").strip()
+        if rua_casa1 and rua_casa1 != logradouro:
+            logr = rua_casa1
+            for prefix in ["AVENIDA ","AV. ","AV ","RUA ","R. "]:
+                if logr.upper().startswith(prefix):
+                    logr = logr[len(prefix):]
+                    break
+
+    ql = quadra_lote.strip()
+    ql = re.sub(r'QUADRA','QD',ql,flags=re.I)
+    ql = re.sub(r'LOTE','LT',ql,flags=re.I)
+
+    # Sanitizar para nome de pasta válido no Windows
+    nome_end = f"{logr} {ql}".strip()
+    nome_end = re.sub(r'[<>:"/\|?*]','',nome_end).strip()
+    if not nome_end:
+        nome_end = "documentos"
+
+    pasta = Path.home() / "Downloads" / "Bercan Projetos" / data / nome_end
     pasta.mkdir(parents=True, exist_ok=True)
     return str(pasta)
 
@@ -458,6 +491,20 @@ def ler_art_ocr(pdf_path, log=None):
     try:
         import pytesseract
         from PIL import Image
+
+        # Configurar Tesseract: primeiro tenta embutido no .exe,
+        # depois instalação padrão do Windows
+        tess_paths = [
+            resource_path(os.path.join("tesseract", "tesseract.exe")),
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            "tesseract",  # PATH do sistema
+        ]
+        for tess in tess_paths:
+            if os.path.exists(tess) or tess == "tesseract":
+                pytesseract.pytesseract.tesseract_cmd = tess
+                break
+
         try:
             import fitz
             L("Renderizando PDF (PyMuPDF)...")
@@ -470,7 +517,10 @@ def ler_art_ocr(pdf_path, log=None):
             img = convert_from_path(pdf_path, dpi=250)[0]
 
         L("OCR em andamento...")
-        texto = pytesseract.image_to_string(img, lang="por")
+        # Configurar pasta tessdata embutida se existir
+        tessdata = resource_path("tesseract/tessdata")
+        cfg = f'--tessdata-dir "{tessdata}"' if os.path.exists(tessdata) else ""
+        texto = pytesseract.image_to_string(img, lang="por", config=cfg)
         linhas = [l.strip() for l in texto.split("\n") if l.strip()]
 
         for l in linhas:
@@ -579,7 +629,7 @@ class App(tk.Tk):
         hdr.pack(fill="x", side="top")
         try:
             from PIL import Image, ImageTk
-            for ext in ["LOGO.jpg","LOGO.png"]:
+            for ext in ["LOGO.jpg","LOGO.png","LOGO.svg"]:
                 lp = asset(ext)
                 if os.path.exists(lp):
                     img = Image.open(lp).resize((48,48), Image.LANCZOS)
@@ -870,7 +920,11 @@ class App(tk.Tk):
         info = ENGENHEIROS[eng]
         assin = asset(info["assinatura"])
         if not os.path.exists(assin): assin = ""
-        saida = criar_pasta_saida()
+        saida = criar_pasta_saida(
+            logradouro=self.vars_art["logradouro"].get().strip(),
+            quadra_lote=self.vars_art["quadra_lote"].get().strip(),
+            casas=self._montar_casas(),
+        )
         dados = {
             "art":             self.vars_art["art"].get().strip(),
             "crea":            self.vars_art["crea"].get().strip() or info["crea"],
