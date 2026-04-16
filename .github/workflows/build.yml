@@ -1,4 +1,4 @@
-name: Gerar EXE - BERCAN Projetos v3
+name: Gerar EXE - BERCAN Projetos v4
 
 on:
   push:
@@ -12,27 +12,113 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11"  # OBRIGATÓRIO — 3.12+ quebra PyInstaller no Windows
 
-      - name: Instalar dependencias Python
-        run: pip install python-docx openpyxl pywin32 pillow lxml pyinstaller pytesseract pymupdf
+      - name: Instalar dependências Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install python-docx==1.1.0 `
+                      openpyxl==3.1.2 `
+                      pywin32==306 `
+                      pillow==10.2.0 `
+                      lxml==5.1.0 `
+                      pytesseract==0.3.10 `
+                      pymupdf==1.23.26 `
+                      pyinstaller==6.3.0
 
+      # ========================================================
+      # INSTALAR TESSERACT E EMBUTIR NO PACOTE (MELHORADO v4)
+      # ========================================================
       - name: Instalar Tesseract via Chocolatey
         shell: powershell
         run: |
-          choco install tesseract --yes --no-progress
-          $tessDir = "C:\Program Files\Tesseract-OCR"
-          New-Item -ItemType Directory -Force -Path "assets\tesseract\tessdata" | Out-Null
-          Copy-Item "$tessDir\tesseract.exe" "assets\tesseract\tesseract.exe"
-          Get-ChildItem "$tessDir\*.dll" | Copy-Item -Destination "assets\tesseract\"
-          # Baixar traineddata português via pip (tessdata)
-          python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/tesseract-ocr/tessdata/raw/main/por.traineddata', 'assets/tesseract/tessdata/por.traineddata')"
-          python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata', 'assets/tesseract/tessdata/eng.traineddata')"
-          Write-Host "Tesseract OK"
+          choco install tesseract --yes --no-progress --version=5.3.3
+          # Confirmar onde o choco instalou
+          $possibleDirs = @(
+            "C:\Program Files\Tesseract-OCR",
+            "C:\ProgramData\chocolatey\lib\tesseract\tools"
+          )
+          $tessDir = $null
+          foreach ($dir in $possibleDirs) {
+            if (Test-Path "$dir\tesseract.exe") {
+              $tessDir = $dir
+              Write-Host "✓ Tesseract encontrado em: $dir"
+              break
+            }
+          }
+          if (-not $tessDir) {
+            Write-Error "Tesseract não foi instalado corretamente"
+            exit 1
+          }
+          # Salvar caminho para os próximos steps
+          "TESS_DIR=$tessDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Gerar EXE
+      - name: Empacotar Tesseract em assets/tesseract
+        shell: powershell
+        run: |
+          $tessDir = $env:TESS_DIR
+          Write-Host "Usando Tesseract de: $tessDir"
+
+          # Criar estrutura de pastas
+          New-Item -ItemType Directory -Force -Path "assets\tesseract\tessdata" | Out-Null
+
+          # Copiar executável
+          Copy-Item "$tessDir\tesseract.exe" "assets\tesseract\tesseract.exe" -Force
+          Write-Host "✓ tesseract.exe copiado"
+
+          # Copiar TODAS as DLLs (crítico para PyInstaller)
+          Get-ChildItem "$tessDir\*.dll" | ForEach-Object {
+            Copy-Item $_.FullName "assets\tesseract\" -Force
+            Write-Host "  ✓ DLL: $($_.Name)"
+          }
+
+          # Copiar outros arquivos auxiliares
+          if (Test-Path "$tessDir\*.exe") {
+            Get-ChildItem "$tessDir\*.exe" | Where-Object { $_.Name -ne "tesseract.exe" } | ForEach-Object {
+              Copy-Item $_.FullName "assets\tesseract\" -Force
+            }
+          }
+
+          # Baixar idiomas portugues e ingles (DIRETO do repo oficial)
+          Write-Host "Baixando tessdata..."
+          $urls = @{
+            "por.traineddata" = "https://github.com/tesseract-ocr/tessdata/raw/main/por.traineddata"
+            "eng.traineddata" = "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata"
+            "osd.traineddata" = "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata"
+          }
+          foreach ($file in $urls.Keys) {
+            $url = $urls[$file]
+            $dest = "assets\tesseract\tessdata\$file"
+            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+            $size = (Get-Item $dest).Length / 1MB
+            Write-Host "  ✓ $file ($([math]::Round($size,2)) MB)"
+          }
+
+          # Verificação final
+          Write-Host ""
+          Write-Host "=== CONTEÚDO FINAL DE assets/tesseract ==="
+          Get-ChildItem -Recurse "assets\tesseract" | Select-Object FullName, Length
+
+      - name: Testar Tesseract embutido
+        shell: powershell
+        run: |
+          $testExe = "assets\tesseract\tesseract.exe"
+          if (-not (Test-Path $testExe)) {
+            Write-Error "Tesseract não foi empacotado"
+            exit 1
+          }
+          # Executar --version para confirmar que roda
+          & $testExe --version
+          Write-Host "✓ Tesseract empacotado funciona"
+
+      # ========================================================
+      # GERAR EXE
+      # ========================================================
+      - name: Gerar EXE com PyInstaller
+        shell: powershell
         run: |
           python -m PyInstaller --onefile --windowed `
             --name "BercanProjetos" `
@@ -43,8 +129,11 @@ jobs:
             --hidden-import win32api `
             --hidden-import win32con `
             --hidden-import pywintypes `
+            --hidden-import pythoncom `
             --hidden-import PIL._imaging `
             --hidden-import PIL.Image `
+            --hidden-import PIL.ImageFilter `
+            --hidden-import PIL.ImageOps `
             --hidden-import docx `
             --hidden-import docx.oxml `
             --hidden-import docx.oxml.ns `
@@ -53,14 +142,18 @@ jobs:
             --hidden-import openpyxl.drawing.image `
             --hidden-import pytesseract `
             --hidden-import fitz `
+            --hidden-import lxml.etree `
             --collect-all win32com `
             --collect-all docx `
             --collect-all openpyxl `
             --collect-all lxml `
+            --collect-all pytesseract `
+            --collect-all fitz `
             app.py
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload do EXE
+        uses: actions/upload-artifact@v4
         with:
-          name: BercanProjetos-Windows
+          name: BercanProjetos-v4-Windows
           path: dist/BercanProjetos.exe
           retention-days: 30
