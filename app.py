@@ -1,10 +1,8 @@
 """
 BERÇAN PROJETOS — Preenchimento Automático de Documentos
 Declaração ART (Word) + Memorial (Excel) → PDF
-Python 3.11 | Tkinter | python-docx | openpyxl | win32com | pytesseract
+v3 — templates embutidos, dois Word (fossa/esgoto), logo, assets internos
 """
-
-# PROTEÇÃO ANTI-LOOP PyInstaller — DEVE SER A PRIMEIRA COISA
 import multiprocessing
 multiprocessing.freeze_support()
 
@@ -16,7 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 # ══════════════════════════════════════════════
-# ASSETS EMBUTIDOS
+# PATHS
 # ══════════════════════════════════════════════
 
 def resource_path(rel: str) -> str:
@@ -31,33 +29,35 @@ def asset(nome: str) -> str:
 # ══════════════════════════════════════════════
 
 ENGENHEIROS = {
-    "FELIPE GUILHERME BERÇAN": {
-        "cpf": "147.849.107-86", "crea": "1022722034D-GO", "assinatura": "FELIPE.png"},
-    "CAIO ARAUJO BRAGA": {
-        "cpf": "011.309.411-67", "crea": "CREA-GO", "assinatura": "CAIO.png"},
-    "JOÃO VITOR CABRAL DE MORAIS": {
-        "cpf": "038.144.411-25", "crea": "CREA-GO", "assinatura": "JOAO_VITOR.jpg"},
-    "JULIO CESAR GOMES DE MORAIS FILHO": {
-        "cpf": "033.865.821-17", "crea": "CREA-GO", "assinatura": "JULIO_CESAR.png"},
-    "PAULA FLEURY DE MORAIS": {
-        "cpf": "033.813.881-18", "crea": "CREA-GO", "assinatura": "PAULA.png"},
-    "ISAAC NATAN SANTOS": {
-        "cpf": "701.117.261-07", "crea": "CREA-GO", "assinatura": "ISAAC.png"},
+    "FELIPE GUILHERME BERÇAN":          {"cpf":"147.849.107-86",  "crea":"1022722034D-GO", "assinatura":"FELIPE.png"},
+    "CAIO ARAUJO BRAGA":                {"cpf":"011.309.411-67",  "crea":"CREA-GO",         "assinatura":"CAIO.png"},
+    "JOÃO VITOR CABRAL DE MORAIS":      {"cpf":"038.144.411-25",  "crea":"CREA-GO",         "assinatura":"JOAO_VITOR.jpg"},
+    "JULIO CESAR GOMES DE MORAIS FILHO":{"cpf":"033.865.821-17",  "crea":"CREA-GO",         "assinatura":"JULIO_CESAR.png"},
+    "PAULA FLEURY DE MORAIS":           {"cpf":"033.813.881-18",  "crea":"CREA-GO",         "assinatura":"PAULA.png"},
+    "ISAAC NATAN SANTOS":               {"cpf":"701.117.261-07",  "crea":"CREA-GO",         "assinatura":"ISAAC.png"},
 }
 
 # ══════════════════════════════════════════════
-# CONSTANTES
+# CONSTANTES DOS TEMPLATES
 # ══════════════════════════════════════════════
 
-TEXTO_ESGOTO_SIM = (
-    "Quanto as instalações hidrossanitárias, tal sistema deve obedecer as "
-    "premissas das normas NBR 5626:2020 e NBR 8160:1999."
-)
+# Templates Word embutidos
+TEMPLATE_FOSSA  = "TEMPLATE_FOSSA.docx"
+TEMPLATE_ESGOTO = "TEMPLATE_ESGOTO.docx"
 
-# Parágrafos da região de esgoto (cor verde #275317) — índices 0-based
-PARAGRAFOS_ESGOTO = [15, 16, 17, 18, 19, 20, 21, 22, 23]
+# Estrutura do template FOSSA
+FOSSA_LINHA_ASS = 36   # parágrafo com ____
+FOSSA_DATA_IDX  = 30
+FOSSA_ENG_IDX   = 38
+FOSSA_CREA_IDX  = 39
 
-# Shapes dos checkboxes de esgoto no drawing XML
+# Estrutura do template ESGOTO
+ESGOTO_LINHA_ASS = 41
+ESGOTO_DATA_IDX  = 35
+ESGOTO_ENG_IDX   = 43
+ESGOTO_CREA_IDX  = 44
+
+# Shapes dos checkboxes de esgoto no Excel
 SHAPE_ESGOTO_SIM = "QO012,12.L0C0;L0C-34^"
 SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
 
@@ -66,144 +66,112 @@ SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
 # ══════════════════════════════════════════════
 
 COR = {
-    "bg":       "#1a1f2e",
-    "bg2":      "#232b3e",
-    "bg_log":   "#0f1520",
-    "campo":    "#2a3550",
-    "botao":    "#2563eb",
-    "barra":    "#22c55e",
-    "texto":    "#f1f5f9",
-    "subtexto": "#7c8fa8",
-    "log":      "#4ade80",
-    "divisor":  "#2d3748",
+    "bg":      "#1a1f2e", "bg2":    "#232b3e",
+    "bg_log":  "#0f1520", "campo":  "#2a3550",
+    "botao":   "#2563eb", "barra":  "#22c55e",
+    "texto":   "#f1f5f9", "subtexto":"#7c8fa8",
+    "log":     "#4ade80", "divisor": "#2d3748",
+    "roxo":    "#7c3aed",
 }
 
 # ══════════════════════════════════════════════
-# UTILITÁRIOS
+# UTILS
 # ══════════════════════════════════════════════
 
 def formatar_data_hoje() -> str:
-    hoje = datetime.date.today()
+    h = datetime.date.today()
     meses = ["janeiro","fevereiro","março","abril","maio","junho",
              "julho","agosto","setembro","outubro","novembro","dezembro"]
-    return f"{hoje.day} de {meses[hoje.month-1]} de {hoje.year}"
+    return f"{h.day} de {meses[h.month-1]} de {h.year}"
 
 def criar_pasta_saida() -> str:
-    data = datetime.date.today().strftime("%Y-%m-%d")
-    pasta = Path.home() / "Downloads" / "Bercan Projetos" / data
+    pasta = Path.home() / "Downloads" / "Bercan Projetos" / datetime.date.today().strftime("%Y-%m-%d")
     pasta.mkdir(parents=True, exist_ok=True)
     return str(pasta)
 
-def normalizar_endereco(logradouro: str, quadra_lote: str) -> str:
-    addr = logradouro.strip()
-    for prefix in ["AVENIDA ", "AV. ", "AV ", "RUA ", "R. "]:
-        if addr.upper().startswith(prefix):
-            addr = addr[len(prefix):]
-            break
-    ql = quadra_lote.strip()
-    ql = re.sub(r'\bQUADRA\b', 'QD', ql, flags=re.IGNORECASE)
-    ql = re.sub(r'\bLOTE\b',   'LT', ql, flags=re.IGNORECASE)
-    return f"{addr.strip()} {ql}".strip()
+def normalizar_end(logr: str, ql: str) -> str:
+    a = logr.strip()
+    for p in ["AVENIDA ","AV. ","AV ","RUA ","R. "]:
+        if a.upper().startswith(p): a = a[len(p):]; break
+    ql2 = re.sub(r'\bQUADRA\b','QD',ql,flags=re.I)
+    ql2 = re.sub(r'\bLOTE\b','LT',ql2,flags=re.I)
+    return f"{a.strip()} {ql2.strip()}".strip()
 
-def nome_arquivo(tipo: str, num: int, logr: str, ql: str) -> str:
-    return f"{tipo} CS {num} - {normalizar_endereco(logr, ql)}"
+def nome_arq(tipo, num, logr, ql):
+    return f"{tipo} CS {num} - {normalizar_end(logr, ql)}"
 
 # ══════════════════════════════════════════════
 # WORD
 # ══════════════════════════════════════════════
 
-def _forcar_preto(para):
+def _preto(para):
     from docx.shared import RGBColor
-    for run in para.runs:
-        try: run.font.color.rgb = RGBColor(0, 0, 0)
+    for r in para.runs:
+        try: r.font.color.rgb = RGBColor(0,0,0)
         except Exception: pass
 
-def _substituir_runs(para, placeholder, valor):
+def _sub(para, ph, val):
     from docx.shared import RGBColor
-    texto = "".join(r.text for r in para.runs)
-    if placeholder not in texto:
-        return
-    novo = texto.replace(placeholder, valor)
-    for run in para.runs:
-        run.text = ""
+    txt = "".join(r.text for r in para.runs)
+    if ph not in txt: return
+    novo = txt.replace(ph, val)
+    for r in para.runs: r.text = ""
     if para.runs:
         para.runs[0].text = novo
-        try: para.runs[0].font.color.rgb = RGBColor(0, 0, 0)
+        try: para.runs[0].font.color.rgb = RGBColor(0,0,0)
         except Exception: pass
 
-def _limpar_para(para):
-    for run in para.runs:
-        run.text = ""
-
-def preencher_word(template_path, saida_path, dados, esgoto_sim, num_casa, log=None):
+def preencher_word(esgoto_sim, saida_path, dados, num_casa, log=None):
+    """
+    Escolhe o template correto (fossa ou esgoto), preenche placeholders,
+    força preto em todos os runs, insere assinatura flutuante.
+    """
     from docx import Document
-    from docx.shared import RGBColor, Inches
+    from docx.shared import RGBColor
 
     def L(m):
         if log: log(m)
 
-    L("Carregando Word...")
-    doc = Document(template_path)
+    # Escolher template
+    tpl_nome = TEMPLATE_ESGOTO if esgoto_sim else TEMPLATE_FOSSA
+    tpl_path = asset(tpl_nome)
+    linha_ass = ESGOTO_LINHA_ASS if esgoto_sim else FOSSA_LINHA_ASS
+
+    L(f"Template: {'ESGOTO' if esgoto_sim else 'FOSSA'}")
+    doc = Document(tpl_path)
 
     subs = {
-        "{1}":                      dados.get("art", ""),
-        "{2}":                      dados.get("crea", ""),
-        "{5}":                      dados.get("logradouro", ""),
-        "{6}":                      dados.get("quadra_lote", ""),
-        "{7}":                      dados.get("bairro", ""),
+        "{1}":                      dados.get("art",""),
+        "{2}":                      dados.get("crea",""),
+        "{5}":                      dados.get("logradouro",""),
+        "{6}":                      dados.get("quadra_lote",""),
+        "{7}":                      dados.get("bairro",""),
         "{9}":                      f"CASA {num_casa}",
-        "{10}":                     dados.get("cidade", ""),
-        "{11}":                     dados.get("uf", ""),
-        "{ENGENHEIRO SELECIONADO}": dados.get("engenheiro_nome", ""),
+        "{10}":                     dados.get("cidade",""),
+        "{11}":                     dados.get("uf",""),
+        "{ENGENHEIRO SELECIONADO}": dados.get("engenheiro_nome",""),
         "{dia/mes/ano}":            formatar_data_hoje(),
     }
 
-    L("Preenchendo campos...")
+    L("Preenchendo e forçando preto...")
     for i, para in enumerate(doc.paragraphs):
-        if i == PARAGRAFOS_ESGOTO[0]:
-            if esgoto_sim:
-                L("Esgoto=SIM: aplicando texto NBR...")
-                _limpar_para(para)
-                if para.runs:
-                    para.runs[0].text = TEXTO_ESGOTO_SIM
-                    try:
-                        para.runs[0].font.color.rgb = RGBColor(0,0,0)
-                        para.runs[0].bold = True
-                    except Exception: pass
-                else:
-                    r = para.add_run(TEXTO_ESGOTO_SIM)
-                    r.bold = True
-                    try: r.font.color.rgb = RGBColor(0,0,0)
-                    except Exception: pass
-                # Limpar todos os demais parágrafos da região
-                for pi in PARAGRAFOS_ESGOTO[1:]:
-                    _limpar_para(doc.paragraphs[pi])
-            else:
-                # Manter conteúdo, forçar preto
-                for pi in PARAGRAFOS_ESGOTO:
-                    _forcar_preto(doc.paragraphs[pi])
-            continue
-
-        if i in PARAGRAFOS_ESGOTO[1:]:
-            continue
-
         for ph, val in subs.items():
-            _substituir_runs(para, ph, val)
-        _forcar_preto(para)
+            _sub(para, ph, val)
+        _preto(para)
 
     L("Inserindo assinatura...")
-    _assinatura_word(doc, dados.get("assinatura_path",""), log)
+    _assinatura_word(doc, dados.get("assinatura_path",""), linha_ass, log)
 
     L(f"Salvando: {Path(saida_path).name}")
     doc.save(saida_path)
     L("Word salvo.")
 
-def _assinatura_word(doc, img_path, log=None):
+def _assinatura_word(doc, img_path, linha_ass_idx, log=None):
     """
-    Insere assinatura como imagem flutuante behind-text via XML anchor.
-    Posicionada no parágrafo 35 (acima da linha ___) sem deslocar texto.
+    Insere assinatura como imagem flutuante behind-text no parágrafo
+    anterior à linha ___, sem deslocar nenhum conteúdo.
     """
-    from docx.shared import Inches, Emu
+    from docx.shared import Inches
     from docx.oxml.ns import qn
     import lxml.etree as etree, copy
 
@@ -211,37 +179,31 @@ def _assinatura_word(doc, img_path, log=None):
         if log: log(m)
 
     if not img_path or not os.path.exists(img_path):
-        L(f"⚠ Assinatura não encontrada: {img_path}")
-        return
+        L(f"⚠ Assinatura não encontrada: {img_path}"); return
 
+    # Parágrafo de inserção = um antes da linha ___
+    idx = max(0, linha_ass_idx - 1)
     try:
-        target = doc.paragraphs[35]
-        for run in target.runs:
-            run.text = ""
+        target = doc.paragraphs[idx]
+        for r in target.runs: r.text = ""
 
         run = target.add_run()
         run.add_picture(img_path, width=Inches(1.8))
 
         drawing = run._r.find(qn('w:drawing'))
-        if drawing is None:
-            L("Assinatura inserida (inline).")
-            return
+        if drawing is None: L("Assinatura inline."); return
 
         inline = drawing.find(qn('wp:inline'))
-        if inline is None:
-            L("Assinatura inserida (inline sem conversão).")
-            return
+        if inline is None: L("Assinatura inline (sem conversão)."); return
 
-        # Buscar elemento graphic dentro do inline
+        # Copiar elemento graphic
         graphic_el = None
         for child in inline:
             if 'graphic' in child.tag:
-                graphic_el = copy.deepcopy(child)
-                break
+                graphic_el = copy.deepcopy(child); break
 
-        # Construir anchor XML para imagem flutuante behind text
-        W_EMU = int(Inches(1.8).emu)
-        H_EMU = int(Inches(0.55).emu)
+        W = int(Inches(1.8).emu)
+        H = int(Inches(0.55).emu)
         anchor_xml = (
             f'<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
             f'distT="0" distB="0" distL="114300" distR="114300" '
@@ -250,7 +212,7 @@ def _assinatura_word(doc, img_path, log=None):
             f'<wp:simplePos x="0" y="0"/>'
             f'<wp:positionH relativeFrom="column"><wp:posOffset>457200</wp:posOffset></wp:positionH>'
             f'<wp:positionV relativeFrom="paragraph"><wp:posOffset>-400000</wp:posOffset></wp:positionV>'
-            f'<wp:extent cx="{W_EMU}" cy="{H_EMU}"/>'
+            f'<wp:extent cx="{W}" cy="{H}"/>'
             f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
             f'<wp:wrapNone/>'
             f'<wp:docPr id="99" name="Assinatura"/>'
@@ -260,64 +222,104 @@ def _assinatura_word(doc, img_path, log=None):
         anchor = etree.fromstring(anchor_xml)
         if graphic_el is not None:
             anchor.append(graphic_el)
-
         drawing.remove(inline)
         drawing.append(anchor)
         L("Assinatura inserida (flutuante behind text).")
-
     except Exception as e:
-        L(f"⚠ Assinatura fallback inline: {e}")
+        L(f"⚠ Assinatura fallback: {e}")
         try:
-            t = doc.paragraphs[35]
+            t = doc.paragraphs[idx]
             for r in t.runs: r.text = ""
             t.add_run().add_picture(img_path, width=Inches(1.5))
-            L("Assinatura inserida (inline fallback).")
+            L("Assinatura inline (fallback).")
         except Exception as e2:
             L(f"⚠ Erro assinatura: {e2}")
+
+def exportar_word_pdf(docx_path, pdf_path, log=None):
+    import win32com.client
+    word = win32com.client.Dispatch("Word.Application")
+    word.Visible = False
+    doc = None
+    try:
+        doc = word.Documents.Open(os.path.abspath(docx_path))
+        doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
+        doc.Close(); word.Quit()
+        if log: log(f"✓ PDF Word: {Path(pdf_path).name}")
+    except Exception:
+        try:
+            if doc: doc.Close()
+            word.Quit()
+        except Exception: pass
+        raise
 
 # ══════════════════════════════════════════════
 # EXCEL
 # ══════════════════════════════════════════════
 
-def _excel_preencher_win32(template_path, xlsx_saida, dados, num_casa, log):
+def _excel_preencher(template_path, xlsx_saida, dados, num_casa, modo_mapeado, log):
     import win32com.client
     xl = win32com.client.Dispatch("Excel.Application")
-    xl.Visible = False
-    xl.DisplayAlerts = False
+    xl.Visible = False; xl.DisplayAlerts = False
     wb = None
     try:
         wb = xl.Workbooks.Open(os.path.abspath(template_path))
         ws = wb.Worksheets("ElemConstrutivos")
         log("Excel aberto.")
 
-        ql = dados.get("quadra_lote","")
-        mapa = {
-            "G40":  dados.get("contratante",""),
-            "G43":  dados.get("engenheiro_nome",""),
-            "AH43": dados.get("crea",""),
-            "AP43": "GO",
-            "AR43": dados.get("cpf",""),
-            "G47":  dados.get("logradouro",""),
-            "AJ47": f"{ql}   CASA {num_casa}",
-            "G49":  dados.get("bairro",""),
-            "V49":  dados.get("cep",""),
-            "AA49": dados.get("cidade",""),
-            "AU49": dados.get("uf","GO"),
-            "H53":  dados.get("engenheiro_nome",""),
-            "Y54":  dados.get("art",""),
-            "H75":  f"GOIÂNIA, {formatar_data_hoje()}",
-            "AE77": dados.get("engenheiro_nome",""),
-            "AE78": dados.get("cpf",""),
-            "AE79": dados.get("crea",""),
-        }
-        log("Preenchendo células...")
-        for coord, val in mapa.items():
-            ws.Range(coord).Value = val
+        if modo_mapeado:
+            ql = dados.get("quadra_lote","")
+            mapa = {
+                "G40":  dados.get("contratante",""),
+                "G43":  dados.get("engenheiro_nome",""),
+                "AH43": dados.get("crea",""),
+                "AP43": "GO",
+                "AR43": dados.get("cpf",""),
+                "G47":  dados.get("logradouro",""),
+                "AJ47": f"{ql}   CASA {num_casa}",
+                "G49":  dados.get("bairro",""),
+                "V49":  dados.get("cep",""),
+                "AA49": dados.get("cidade",""),
+                "AU49": dados.get("uf","GO"),
+                "H53":  dados.get("engenheiro_nome",""),
+                "Y54":  dados.get("art",""),
+                "H75":  f"GOIÂNIA, {formatar_data_hoje()}",
+                "AE77": dados.get("engenheiro_nome",""),
+                "AE78": dados.get("cpf",""),
+                "AE79": dados.get("crea",""),
+            }
+            log("Preenchendo células (mapeado)...")
+            for coord, val in mapa.items():
+                ws.Range(coord).Value = val
+        else:
+            # Modo auto: detecta células com fundo azul claro CAIXA
+            ql = dados.get("quadra_lote","")
+            campos = [
+                dados.get("contratante",""),
+                dados.get("engenheiro_nome",""),
+                dados.get("crea",""),
+                "GO",
+                dados.get("cpf",""),
+                dados.get("logradouro",""),
+                f"{ql} CASA {num_casa}",
+                dados.get("bairro",""),
+                dados.get("cep",""),
+                dados.get("cidade",""),
+                dados.get("uf","GO"),
+            ]
+            idx = 0
+            log("Preenchendo células (auto-detecção azul)...")
+            for row in ws.UsedRange.Rows:
+                for cell in row.Cells:
+                    c = cell.Interior.Color
+                    r,g,b = c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF
+                    if b>170 and g>190 and r>160 and b>=g and idx<len(campos):
+                        if not str(cell.Value or "").strip():
+                            cell.Value = campos[idx]; idx += 1
+            log(f"Auto-preenchimento: {idx} células.")
 
         log(f"Salvando .xlsx: {Path(xlsx_saida).name}")
         wb.SaveAs(os.path.abspath(xlsx_saida), 51)
-        wb.Close(False)
-        xl.Quit()
+        wb.Close(False); xl.Quit()
         log("Excel salvo.")
     except Exception:
         try:
@@ -326,60 +328,13 @@ def _excel_preencher_win32(template_path, xlsx_saida, dados, num_casa, log):
         except Exception: pass
         raise
 
-
-def _excel_preencher_auto(template_path, xlsx_saida, dados, num_casa, log):
-    """Modo não mapeado: detecta células azuis CAIXA e preenche por ordem."""
-    import win32com.client
-    xl = win32com.client.Dispatch("Excel.Application")
-    xl.Visible = False
-    xl.DisplayAlerts = False
-    wb = None
-    try:
-        wb = xl.Workbooks.Open(os.path.abspath(template_path))
-        ws = wb.Worksheets("ElemConstrutivos")
-        log("Excel aberto (modo auto).")
-
-        ql = dados.get("quadra_lote","")
-        campos = [
-            dados.get("contratante",""),
-            dados.get("engenheiro_nome",""),
-            dados.get("crea",""),
-            "GO",
-            dados.get("cpf",""),
-            dados.get("logradouro",""),
-            f"{ql} CASA {num_casa}",
-            dados.get("bairro",""),
-            dados.get("cep",""),
-            dados.get("cidade",""),
-            dados.get("uf","GO"),
-        ]
-        idx = 0
-        for row in ws.UsedRange.Rows:
-            for cell in row.Cells:
-                c = cell.Interior.Color
-                r = c & 0xFF
-                g = (c >> 8) & 0xFF
-                b = (c >> 16) & 0xFF
-                if b > 170 and g > 190 and r > 160 and b >= g and idx < len(campos):
-                    if not str(cell.Value or "").strip():
-                        cell.Value = campos[idx]
-                        idx += 1
-
-        log(f"Auto-preenchimento: {idx} células.")
-        wb.SaveAs(os.path.abspath(xlsx_saida), 51)
-        wb.Close(False)
-        xl.Quit()
-        log("Excel salvo (auto).")
-    except Exception:
-        try:
-            if wb: wb.Close(False)
-            xl.Quit()
-        except Exception: pass
-        raise
-
-
 def _checkboxes_xml(xlsx_path, esgoto_sim, log=None):
-    from xml.etree import ElementTree as ET
+    """
+    Manipula APENAS os dois checkboxes de esgoto via XML usando lxml.
+    lxml preserva todos os prefixos de namespace originais (xdr:, a:, r:)
+    evitando que o Excel trate os outros shapes como inválidos.
+    """
+    from lxml import etree
     NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
     NS_A   = "http://schemas.openxmlformats.org/drawingml/2006/main"
     tmp = xlsx_path + ".tmp"
@@ -389,9 +344,7 @@ def _checkboxes_xml(xlsx_path, esgoto_sim, log=None):
             for item in zi.infolist():
                 data = zi.read(item.filename)
                 if item.filename == "xl/drawings/drawing1.xml":
-                    ET.register_namespace("xdr", NS_XDR)
-                    ET.register_namespace("a", NS_A)
-                    root = ET.fromstring(data)
+                    root = etree.fromstring(data)
                     for anch in root.findall(f"{{{NS_XDR}}}twoCellAnchor"):
                         sp = anch.find(f"{{{NS_XDR}}}sp")
                         if sp is None: continue
@@ -404,18 +357,21 @@ def _checkboxes_xml(xlsx_path, esgoto_sim, log=None):
                         marcado = (nome==SHAPE_ESGOTO_SIM and esgoto_sim) or \
                                   (nome==SHAPE_ESGOTO_NAO and not esgoto_sim)
                         cor = "000000" if marcado else "FFFFFF"
+                        # Remover fill anterior
                         for tag in [f"{{{NS_A}}}solidFill", f"{{{NS_A}}}noFill"]:
                             el = spPr.find(tag)
                             if el is not None: spPr.remove(el)
-                        solid = ET.SubElement(spPr, f"{{{NS_A}}}solidFill")
-                        clr   = ET.SubElement(solid, f"{{{NS_A}}}srgbClr")
+                        # Inserir solidFill com cor correta
+                        solid = etree.SubElement(spPr, f"{{{NS_A}}}solidFill")
+                        clr   = etree.SubElement(solid, f"{{{NS_A}}}srgbClr")
                         clr.set("val", cor)
-                    data = ET.tostring(root, encoding="UTF-8", xml_declaration=True)
+                    # lxml preserva namespaces originais (xdr:, a:, r:)
+                    data = etree.tostring(root, xml_declaration=True,
+                                         encoding="UTF-8", standalone=True)
                 zo.writestr(item, data)
         if log: log(f"Checkbox esgoto → {'SIM' if esgoto_sim else 'NÃO'}")
     finally:
         if os.path.exists(tmp): os.remove(tmp)
-
 
 def _forcar_preto_excel(xlsx_path, log=None):
     from openpyxl import load_workbook
@@ -424,8 +380,7 @@ def _forcar_preto_excel(xlsx_path, log=None):
         wb = load_workbook(xlsx_path)
         ws = wb["ElemConstrutivos"]
         for coord in ["G40","G43","AH43","AP43","AR43","G47","AJ47",
-                      "G49","V49","AA49","AU49","H53","Y54","H75",
-                      "AE77","AE78","AE79"]:
+                      "G49","V49","AA49","AU49","H53","Y54","H75","AE77","AE78","AE79"]:
             cell = ws[coord]
             if cell.value:
                 f = cell.font
@@ -436,13 +391,11 @@ def _forcar_preto_excel(xlsx_path, log=None):
     except Exception as e:
         if log: log(f"⚠ Força-preto Excel: {e}")
 
-
 def _assinatura_excel(xlsx_path, img_path, log=None):
     from openpyxl import load_workbook
     from openpyxl.drawing.image import Image as XLImage
     if not img_path or not os.path.exists(img_path):
-        if log: log("⚠ Assinatura Excel não encontrada.")
-        return
+        if log: log("⚠ Assinatura Excel não encontrada."); return
     try:
         wb = load_workbook(xlsx_path)
         ws = wb["ElemConstrutivos"]
@@ -454,12 +407,10 @@ def _assinatura_excel(xlsx_path, img_path, log=None):
     except Exception as e:
         if log: log(f"⚠ Assinatura Excel: {e}")
 
-
 def _pdf_excel(xlsx_path, pdf_path, log=None):
     import win32com.client
     xl = win32com.client.Dispatch("Excel.Application")
-    xl.Visible = False
-    xl.DisplayAlerts = False
+    xl.Visible = False; xl.DisplayAlerts = False
     wb = None
     try:
         wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
@@ -468,8 +419,7 @@ def _pdf_excel(xlsx_path, pdf_path, log=None):
         ws.PageSetup.FitToPagesWide = 1
         ws.PageSetup.FitToPagesTall = 1
         ws.ExportAsFixedFormat(0, os.path.abspath(pdf_path), 1, True, False)
-        wb.Close(False)
-        xl.Quit()
+        wb.Close(False); xl.Quit()
         if log: log(f"✓ PDF Excel: {Path(pdf_path).name}")
     except Exception:
         try:
@@ -478,57 +428,23 @@ def _pdf_excel(xlsx_path, pdf_path, log=None):
         except Exception: pass
         raise
 
-
 def preencher_excel_e_pdf(template_path, xlsx_saida, pdf_saida,
                           dados, esgoto_sim, num_casa, assinatura_path,
                           modo_mapeado=True, log=None):
     def L(m):
         if log: log(m)
-
     L(f"Excel {'mapeado' if modo_mapeado else 'auto'}...")
     try:
-        if modo_mapeado:
-            _excel_preencher_win32(template_path, xlsx_saida, dados, num_casa, L)
-        else:
-            _excel_preencher_auto(template_path, xlsx_saida, dados, num_casa, L)
+        _excel_preencher(template_path, xlsx_saida, dados, num_casa, modo_mapeado, L)
     except Exception:
-        L("✗ Erro Excel:\n" + traceback.format_exc())
-        raise
-
-    L("Checkboxes esgoto...")
+        L("✗ Erro Excel:\n" + traceback.format_exc()); raise
     try: _checkboxes_xml(xlsx_saida, esgoto_sim, L)
     except Exception as e: L(f"⚠ Checkboxes: {e}")
-
-    L("Forçando cores preto...")
     _forcar_preto_excel(xlsx_saida, L)
-
-    if assinatura_path:
-        _assinatura_excel(xlsx_saida, assinatura_path, L)
-
-    L("Exportando PDF...")
+    if assinatura_path: _assinatura_excel(xlsx_saida, assinatura_path, L)
     try: _pdf_excel(xlsx_saida, pdf_saida, L)
     except Exception:
-        L("✗ Erro PDF Excel:\n" + traceback.format_exc())
-        raise
-
-
-def exportar_word_pdf(docx_path, pdf_path, log=None):
-    import win32com.client
-    word = win32com.client.Dispatch("Word.Application")
-    word.Visible = False
-    doc = None
-    try:
-        doc = word.Documents.Open(os.path.abspath(docx_path))
-        doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
-        doc.Close()
-        word.Quit()
-        if log: log(f"✓ PDF Word: {Path(pdf_path).name}")
-    except Exception:
-        try:
-            if doc: doc.Close()
-            word.Quit()
-        except Exception: pass
-        raise
+        L("✗ Erro PDF Excel:\n" + traceback.format_exc()); raise
 
 # ══════════════════════════════════════════════
 # OCR
@@ -537,68 +453,59 @@ def exportar_word_pdf(docx_path, pdf_path, log=None):
 def ler_art_ocr(pdf_path, log=None):
     def L(m):
         if log: log(m)
-
-    resultado = {"art":"","crea":"","contratante":"","logradouro":"",
-                 "quadra_lote":"","bairro":"","cep":"","cidade":"","uf":"GO"}
+    res = {"art":"","crea":"","contratante":"","logradouro":"",
+           "quadra_lote":"","bairro":"","cep":"","cidade":"","uf":"GO"}
     try:
         import pytesseract
         from PIL import Image
         try:
             import fitz
-            L("Renderizando PDF...")
-            doc = fitz.open(pdf_path)
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(2.5,2.5))
-            img = Image.open(BytesIO(pix.tobytes("png")))
-            doc.close()
+            L("Renderizando PDF (PyMuPDF)...")
+            d = fitz.open(pdf_path)
+            pix = d[0].get_pixmap(matrix=fitz.Matrix(2.5,2.5))
+            img = Image.open(BytesIO(pix.tobytes("png"))); d.close()
         except ImportError:
             from pdf2image import convert_from_path
             L("Renderizando PDF (pdf2image)...")
-            imgs = convert_from_path(pdf_path, dpi=250)
-            img = imgs[0]
+            img = convert_from_path(pdf_path, dpi=250)[0]
 
         L("OCR em andamento...")
         texto = pytesseract.image_to_string(img, lang="por")
         linhas = [l.strip() for l in texto.split("\n") if l.strip()]
 
-        for linha in linhas:
-            m = re.search(r'\b(\d{13})\b', linha)
-            if m: resultado["art"] = m.group(1); break
-
-        for linha in linhas:
-            m = re.search(r'(\d{7,10}[A-Z]-GO)', linha)
-            if m: resultado["crea"] = m.group(1); break
-
-        for linha in linhas:
-            m = re.search(r'\b(\d{5}-\d{3})\b', linha)
-            if m: resultado["cep"] = m.group(1); break
-
-        for linha in linhas:
-            m = re.search(r'Quadra[:\s]*(\d+)\s*Lote[:\s]*(\d+)', linha, re.I)
+        for l in linhas:
+            m = re.search(r'\b(\d{13})\b', l)
+            if m: res["art"] = m.group(1); break
+        for l in linhas:
+            m = re.search(r'(\d{7,10}[A-Z]-GO)', l)
+            if m: res["crea"] = m.group(1); break
+        for l in linhas:
+            m = re.search(r'\b(\d{5}-\d{3})\b', l)
+            if m: res["cep"] = m.group(1); break
+        for l in linhas:
+            m = re.search(r'Quadra[:\s]*(\d+)\s*Lote[:\s]*(\d+)', l, re.I)
             if m:
-                resultado["quadra_lote"] = f"QD {m.group(1)} LT {m.group(2)}"
-                logr = linha.split(m.group(0))[0].strip().rstrip(',')
-                if logr: resultado["logradouro"] = logr
+                res["quadra_lote"] = f"QD {m.group(1)} LT {m.group(2)}"
+                logr = l.split(m.group(0))[0].strip().rstrip(',')
+                if logr: res["logradouro"] = logr
                 break
-
-        for linha in linhas:
-            m = re.search(r'Cidade[:\s]+([A-ZÀ-Ú][^\n\r]+?)(?:\s*-\s*(GO|SP|MG|RJ|MT|MS|TO|PA))?$', linha, re.I)
+        for l in linhas:
+            m = re.search(r'Cidade[:\s]+([A-ZÀ-Ú][^\n]+?)(?:\s*-\s*(GO|SP|MG))?$', l, re.I)
             if m:
-                resultado["cidade"] = m.group(1).strip()
-                if m.group(2): resultado["uf"] = m.group(2)
+                res["cidade"] = m.group(1).strip()
+                if m.group(2): res["uf"] = m.group(2)
                 break
+        for l in linhas:
+            m = re.search(r'Bairro[:\s]+(.+)', l, re.I)
+            if m: res["bairro"] = m.group(1).strip()[:60]; break
 
-        for linha in linhas:
-            m = re.search(r'Bairro[:\s]+(.+)', linha, re.I)
-            if m: resultado["bairro"] = m.group(1).strip()[:60]; break
-
-        preench = sum(1 for v in resultado.values() if v)
-        L(f"OCR concluído: {preench}/{len(resultado)} campos identificados.")
+        n = sum(1 for v in res.values() if v)
+        L(f"OCR: {n}/{len(res)} campos identificados.")
     except ImportError:
-        L("⚠ OCR não disponível (pytesseract ausente no .exe de teste).")
+        L("⚠ pytesseract não disponível.")
     except Exception as e:
         L(f"⚠ Erro OCR: {e}")
-
-    return resultado
+    return res
 
 # ══════════════════════════════════════════════
 # ORQUESTRADOR
@@ -610,17 +517,15 @@ def processar(params, step_cb=None, log=None):
     def L(m):
         if log: log(m)
 
-    word_tpl   = params["word_template"]
-    excel_tpl  = params["excel_template"]
-    saida_dir  = params["saida_dir"]
-    assin      = params["assinatura_path"]
-    esgoto     = params["esgoto_sim"]
-    casas      = params["casas"]
-    dados      = params["dados"]
-    mapeado    = params.get("modo_mapeado", True)
+    excel_tpl = params["excel_template"]
+    saida     = params["saida_dir"]
+    assin     = params["assinatura_path"]
+    esgoto    = params["esgoto_sim"]
+    casas     = params["casas"]
+    dados     = params["dados"]
+    mapeado   = params.get("modo_mapeado", True)
 
-    total = len(casas) * 3
-    atual = 0
+    total = len(casas) * 3; atual = 0
 
     for casa in casas:
         num  = casa["num"]
@@ -630,20 +535,20 @@ def processar(params, step_cb=None, log=None):
 
         L(f"\n{'='*42}\nCASA {num} — {logr}\n{'='*42}")
 
-        nd = nome_arquivo("DECLARAÇÃO ART", num, logr, ql)
-        nm = nome_arquivo("MEMORIAL",       num, logr, ql)
-        docx = os.path.join(saida_dir, nd+".docx")
-        xlsx = os.path.join(saida_dir, nm+".xlsx")
-        pdfd = os.path.join(saida_dir, nd+".pdf")
-        pdfm = os.path.join(saida_dir, nm+".pdf")
+        nd   = nome_arq("DECLARAÇÃO ART", num, logr, ql)
+        nm   = nome_arq("MEMORIAL",       num, logr, ql)
+        docx = os.path.join(saida, nd+".docx")
+        xlsx = os.path.join(saida, nm+".xlsx")
+        pdfd = os.path.join(saida, nd+".pdf")
+        pdfm = os.path.join(saida, nm+".pdf")
 
-        atual += 1; S(int(atual/total*100), f"Casa {num}: Word...")
-        preencher_word(word_tpl, docx, d, esgoto, num, log=L)
+        atual+=1; S(int(atual/total*100), f"Casa {num}: Word...")
+        preencher_word(esgoto, docx, d, num, log=L)
 
-        atual += 1; S(int(atual/total*100), f"Casa {num}: Excel...")
+        atual+=1; S(int(atual/total*100), f"Casa {num}: Excel...")
         preencher_excel_e_pdf(excel_tpl, xlsx, pdfm, d, esgoto, num, assin, mapeado, L)
 
-        atual += 1; S(int(atual/total*100), f"Casa {num}: PDF Word...")
+        atual+=1; S(int(atual/total*100), f"Casa {num}: PDF Word...")
         exportar_word_pdf(docx, pdfd, L)
 
         L(f"✓ Casa {num} concluída.")
@@ -674,14 +579,15 @@ class App(tk.Tk):
         hdr.pack(fill="x", side="top")
         try:
             from PIL import Image, ImageTk
-            lp = asset("LOGO.png")
-            if os.path.exists(lp):
-                img = Image.open(lp).resize((48,48), Image.LANCZOS)
-                self._logo = ImageTk.PhotoImage(img)
-                tk.Label(hdr, image=self._logo, bg="#111827").pack(side="left", padx=14)
+            for ext in ["LOGO.jpg","LOGO.png"]:
+                lp = asset(ext)
+                if os.path.exists(lp):
+                    img = Image.open(lp).resize((48,48), Image.LANCZOS)
+                    self._logo = ImageTk.PhotoImage(img)
+                    tk.Label(hdr, image=self._logo, bg="#111827").pack(side="left", padx=14)
+                    break
         except Exception: pass
-        tf = tk.Frame(hdr, bg="#111827")
-        tf.pack(side="left")
+        tf = tk.Frame(hdr, bg="#111827"); tf.pack(side="left")
         tk.Label(tf, text="BERÇAN PROJETOS", font=("Segoe UI",15,"bold"),
                  bg="#111827", fg=COR["texto"]).pack(anchor="w")
         tk.Label(tf, text="Preenchimento Automático de Documentos",
@@ -706,15 +612,13 @@ class App(tk.Tk):
         ce.pack(side="left", fill="both", expand=True, padx=(0,10))
         cd.pack(side="left", fill="both", expand=True)
 
-        # ── ESQ ──
-        self._s(ce, "ARQUIVOS")
-        self.var_word  = self._arq(ce, "Template Word (.docx):", "docx")
-        self.var_excel = self._arq(ce, "Memorial Excel (.xlsx):", "excel")
+        # ── COLUNA ESQ ──
+        self._s(ce, "MEMORIAL EXCEL")
+        self.var_excel = self._arq(ce, "Arquivo Memorial (.xlsx):", "excel")
 
         self._s(ce, "MODO DO MEMORIAL")
         self.var_modo = tk.StringVar(value="mapeado")
-        mf = tk.Frame(ce, bg=COR["bg"])
-        mf.pack(fill="x", pady=(0,6))
+        mf = tk.Frame(ce, bg=COR["bg"]); mf.pack(fill="x", pady=(0,6))
         for val, txt in [("mapeado","Mapeado (com {N})"),("nao_mapeado","Não mapeado (detectar azul)")]:
             tk.Radiobutton(mf, text=txt, variable=self.var_modo, value=val,
                            bg=COR["bg"], fg=COR["texto"], selectcolor=COR["campo"],
@@ -730,15 +634,14 @@ class App(tk.Tk):
         self.lbl_crea = self._lbl(ce, "CREA: —")
 
         self._s(ce, "DADOS DA ART")
-        of = tk.Frame(ce, bg=COR["bg"])
-        of.pack(fill="x", pady=(0,6))
+        of = tk.Frame(ce, bg=COR["bg"]); of.pack(fill="x", pady=(0,6))
         self.var_art_pdf = tk.StringVar()
         tk.Entry(of, textvariable=self.var_art_pdf, width=26,
                  bg=COR["campo"], fg=COR["texto"], insertbackground=COR["texto"],
                  relief="flat", font=("Segoe UI",8)).pack(side="left", fill="x", expand=True)
         tk.Button(of, text="...", bg=COR["campo"], fg=COR["texto"], relief="flat",
                   font=("Segoe UI",8), command=self._browse_art).pack(side="left", padx=(3,0))
-        tk.Button(of, text="🔍 LER ART", bg="#7c3aed", fg=COR["texto"],
+        tk.Button(of, text="🔍 LER ART", bg=COR["roxo"], fg=COR["texto"],
                   relief="flat", font=("Segoe UI",8,"bold"), cursor="hand2",
                   command=self._ocr).pack(side="left", padx=(5,0))
 
@@ -756,15 +659,19 @@ class App(tk.Tk):
         ]:
             self.vars_art[key] = self._txt(ce, lbl)
 
-        # ── DIR ──
+        # ── COLUNA DIR ──
         self._s(cd, "OPÇÕES")
         self.var_esgoto = tk.BooleanVar(value=False)
         self._ck(cd, "Sistema público de esgoto (SIM)", self.var_esgoto)
+
+        # Info sobre template
+        tk.Label(cd, text="  ↳ Template Word selecionado automaticamente",
+                 bg=COR["bg"], fg=COR["subtexto"], font=("Segoe UI",8)).pack(anchor="w")
+
         self.var_esquina = tk.BooleanVar(value=False)
         self._ck(cd, "Lote de esquina", self.var_esquina, command=self._on_esquina)
 
-        qf = tk.Frame(cd, bg=COR["bg"])
-        qf.pack(fill="x", pady=(6,0))
+        qf = tk.Frame(cd, bg=COR["bg"]); qf.pack(fill="x", pady=(6,0))
         tk.Label(qf, text="Quantidade de casas:", bg=COR["bg"], fg=COR["subtexto"],
                  font=("Segoe UI",9)).pack(side="left")
         self.var_qtd = tk.IntVar(value=1)
@@ -776,21 +683,19 @@ class App(tk.Tk):
 
         self.var_mesma = tk.BooleanVar(value=True)
         self.frm_esq_opt = tk.Frame(cd, bg=COR["bg"])
-        for v, t in [(True,"Mesma rua"),(False,"Ruas diferentes")]:
+        for v,t in [(True,"Mesma rua"),(False,"Ruas diferentes")]:
             tk.Radiobutton(self.frm_esq_opt, text=t, variable=self.var_mesma, value=v,
                            bg=COR["bg"], fg=COR["texto"], selectcolor=COR["campo"],
                            command=self._on_mesma).pack(anchor="w")
         self.frm_esq_opt.pack_forget()
 
         self._s(cd, "RUAS POR CASA")
-        self.frm_ruas = tk.Frame(cd, bg=COR["bg"])
-        self.frm_ruas.pack(fill="x")
+        self.frm_ruas = tk.Frame(cd, bg=COR["bg"]); self.frm_ruas.pack(fill="x")
         tk.Label(self.frm_ruas, text="(Ativo: lote de esquina + ruas diferentes)",
                  bg=COR["bg"], fg=COR["subtexto"], font=("Segoe UI",8)).pack()
 
         self._s(cd, "LOG")
-        lf = tk.Frame(cd, bg=COR["bg_log"])
-        lf.pack(fill="x")
+        lf = tk.Frame(cd, bg=COR["bg_log"]); lf.pack(fill="x")
         self.txt_log = tk.Text(lf, height=10, width=44, bg=COR["bg_log"], fg=COR["log"],
                                font=("Consolas",8), relief="flat", state="disabled")
         sb = tk.Scrollbar(lf, command=self.txt_log.yview)
@@ -841,16 +746,16 @@ class App(tk.Tk):
     def _arq(self, p, lbl, tipo):
         tk.Label(p, text=lbl, bg=COR["bg"], fg=COR["subtexto"],
                  font=("Segoe UI",8)).pack(anchor="w")
-        f = tk.Frame(p, bg=COR["bg"])
-        f.pack(fill="x", pady=(0,4))
+        f = tk.Frame(p, bg=COR["bg"]); f.pack(fill="x", pady=(0,4))
         v = tk.StringVar()
         tk.Entry(f, textvariable=v, width=34, bg=COR["campo"], fg=COR["texto"],
                  insertbackground=COR["texto"], relief="flat",
                  font=("Segoe UI",9)).pack(side="left", fill="x", expand=True)
         def browse():
-            if tipo=="dir": p2=filedialog.askdirectory()
-            elif tipo=="docx": p2=filedialog.askopenfilename(filetypes=[("Word","*.docx"),("Todos","*.*")])
-            else: p2=filedialog.askopenfilename(filetypes=[("Excel","*.xlsx *.xls"),("Todos","*.*")])
+            if tipo=="excel":
+                p2 = filedialog.askopenfilename(filetypes=[("Excel","*.xlsx *.xls"),("Todos","*.*")])
+            else:
+                p2 = filedialog.askopenfilename(filetypes=[("Todos","*.*")])
             if p2: v.set(p2)
         tk.Button(f, text="...", bg=COR["campo"], fg=COR["texto"], relief="flat",
                   font=("Segoe UI",9), command=browse).pack(side="left", padx=(4,0))
@@ -862,7 +767,6 @@ class App(tk.Tk):
         w,h = min(int(sw*.90),1150), min(int(sh*.88),780)
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
-    # eventos
     def _on_eng(self, e=None):
         eng = self.var_eng.get()
         if eng in ENGENHEIROS:
@@ -914,7 +818,6 @@ class App(tk.Tk):
         self.pb["value"] = pct
         self.lbl_prog.config(text=desc)
 
-    # OCR
     def _browse_art(self):
         p = filedialog.askopenfilename(filetypes=[("PDF","*.pdf"),("Todos","*.*")])
         if p: self.var_art_pdf.set(p)
@@ -931,17 +834,14 @@ class App(tk.Tk):
 
     def _aplicar_ocr(self, campos):
         self.btn.config(state="normal")
-        n = 0
+        n = sum(1 for k,v in campos.items() if v and k in self.vars_art and not self.vars_art[k].get())
         for k, v in campos.items():
             if v and k in self.vars_art:
-                self.vars_art[k].set(v); n += 1
-        self._log(f"✓ OCR: {n} campos preenchidos. Verifique antes de gerar.")
+                self.vars_art[k].set(v)
+        self._log(f"✓ OCR: campos preenchidos. Verifique antes de gerar.")
 
-    # validação
     def _validar(self):
         erros = []
-        if not self.var_word.get() or not Path(self.var_word.get()).exists():
-            erros.append("Template Word não encontrado.")
         if not self.var_excel.get() or not Path(self.var_excel.get()).exists():
             erros.append("Memorial Excel não encontrado.")
         if not self.var_eng.get():
@@ -986,7 +886,6 @@ class App(tk.Tk):
             "assinatura_path": assin,
         }
         params = {
-            "word_template":  self.var_word.get(),
             "excel_template": self.var_excel.get(),
             "saida_dir":      saida,
             "assinatura_path":assin,
@@ -995,9 +894,11 @@ class App(tk.Tk):
             "dados":          dados,
             "modo_mapeado":   self.var_modo.get() == "mapeado",
         }
-        self.txt_log.config(state="normal"); self.txt_log.delete("1.0","end"); self.txt_log.config(state="disabled")
+        self.txt_log.config(state="normal"); self.txt_log.delete("1.0","end")
+        self.txt_log.config(state="disabled")
         self.pb["value"] = 0; self.btn.config(state="disabled")
-        self._log(f"Pasta de saída: {saida}")
+        self._log(f"📁 Saída: {saida}")
+        self._log(f"📄 Template: {'ESGOTO' if self.var_esgoto.get() else 'FOSSA'} (embutido)")
 
         def run():
             try:
@@ -1024,13 +925,12 @@ class App(tk.Tk):
             try:
                 with open(rel,"w",encoding="utf-8") as f:
                     f.write("RELATÓRIO DE ERRO — BERÇAN PROJETOS\n"+"="*50+"\n")
-                    f.write(f"Data: {datetime.datetime.now()}\nWord: {self.var_word.get()}\n")
-                    f.write(f"Excel: {self.var_excel.get()}\nEng: {self.var_eng.get()}\n")
-                    f.write("="*50+"\n\n"+log_text)
-                messagebox.showerror("Erro", f"Erro no processamento.\n\nRelatório:\n{rel}")
+                    f.write(f"Data: {datetime.datetime.now()}\n")
+                    f.write(f"Excel: {self.var_excel.get()}\n")
+                    f.write(f"Eng: {self.var_eng.get()}\n"+"="*50+"\n\n"+log_text)
+                messagebox.showerror("Erro", f"Erro no processamento.\nRelatório:\n{rel}")
             except Exception:
                 messagebox.showerror("Erro","Erro. Verifique o log.")
-
 
 if __name__ == "__main__":
     App().mainloop()
