@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 BERÇAN PROJETOS — Preenchimento Automático de Documentos CAIXA
-Versão 4.0 — Abril/2026
+Versão 4.1 — Abril/2026
 
-Correções nesta versão:
+Correções v4 (original):
 - Assinatura Memorial (Excel) via win32com com qualidade preservada (+50% tamanho)
 - Assinatura Declaração (Word) +50% tamanho
 - Checkboxes do Memorial via imagens PNG sobrepostas (confiável e editável)
@@ -11,6 +11,15 @@ Correções nesta versão:
 - Bug do Modo Não Mapeado (float & int) corrigido
 - Pasta destino renomeada: DOCUMENTOS DE VISTORIA
 - Botão INTERROMPER processamento (threading.Event)
+
+Correções v4.1:
+- CHECKBOX_ANCORA_CELULA corrigida de AR55 → AM70 (posição real no drawing XML)
+- CHECKBOX_LARGURA_PT/ALTURA_PT ajustados para cobrir AM70:AP70 corretamente
+- asset_checkbox() adicionada: fallback automático de extensão (.png/.jpeg/.png.jpeg)
+- ASSINATURA_EXCEL_ANCORA ajustada de AE73 → AE74 (sem offset negativo frágil)
+- Assinatura Word: posOffset corrigido para 0/−685800 (alinha à esquerda da coluna)
+- SHAPE_ESGOTO_SIM/NAO confirmados via inspeção do drawing1.xml do template real
+- UF padrão mantido como GO (OCR descartado — preenchimento manual preferido)
 """
 
 # ============================================================
@@ -67,21 +76,25 @@ FOSSA_LINHA_ASS = 36
 ESGOTO_LINHA_ASS = 41
 
 # ----- Checkboxes como imagens PNG (NOVO v4) -----
+# NOTA: os arquivos no repositório têm extensão dupla (.png.jpeg).
+# A função asset_checkbox() abaixo resolve automaticamente a extensão correta.
 CHECKBOX_COM_ESGOTO_IMG = "CHECKBOX_COM_ESGOTO.png"
 CHECKBOX_SEM_ESGOTO_IMG = "CHECKBOX_SEM_ESGOTO.png"
 
-# Ajuste fino do posicionamento da imagem dos checkboxes no Excel
-# 1 cm ≈ 28.35 pontos. Ajuste essas constantes se precisar reposicionar.
-CHECKBOX_ANCORA_CELULA = "AR55"   # célula âncora (canto superior-esquerdo da imagem)
-CHECKBOX_OFFSET_X_PT = 0          # desloca horizontalmente (+ direita / - esquerda)
-CHECKBOX_OFFSET_Y_PT = 0          # desloca vertical (+ baixo / - cima)
-CHECKBOX_LARGURA_PT = 70          # largura da imagem em pontos
-CHECKBOX_ALTURA_PT = 240          # altura da imagem em pontos
+# ----- Checkboxes — posicionamento (fallback se detecção automática falhar) -----
+# Estes valores são usados APENAS se _detectar_linha_esgoto() não encontrar o texto.
+# Em condições normais, a posição é detectada automaticamente a cada execução,
+# então uma nova versão do memorial não quebra o app.
+CHECKBOX_ANCORA_FALLBACK = "AM70"  # fallback: posição conhecida no memorial V072
+CHECKBOX_OFFSET_X_PT = 0
+CHECKBOX_OFFSET_Y_PT = 0
+CHECKBOX_LARGURA_PT = 85           # cobre célula SIM + célula NÃO (~85pt)
+CHECKBOX_ALTURA_PT = 14            # altura de uma linha
 
-# ----- Checkboxes nativos do Excel (shapes existentes no template) -----
-# Nomes dos shapes dentro de xl/drawings/drawing1.xml
-SHAPE_ESGOTO_SIM = "QO012,12.L0C0;L0C-34^"
-SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
+# ----- Texto usado para localizar a linha do esgoto automaticamente -----
+# A detecção varre a planilha procurando este fragmento (case-insensitive).
+# Se o texto mudar na nova versão do memorial, atualizar apenas aqui.
+TEXTO_ITEM_ESGOTO = "sistema público de coleta de esgoto sanitário"
 
 # ----- Assinatura Word (DECLARAÇÃO) — +50% v4 -----
 # Antes: Inches(1.8). Agora: Inches(2.7) — aumento proporcional de 50%.
@@ -89,10 +102,11 @@ ASSINATURA_WORD_LARGURA = Inches(2.7)
 
 # ----- Assinatura Excel (MEMORIAL) — +50% v4 -----
 # Antes inserida via openpyxl (perdia qualidade). Agora via win32com Shapes.
-# Tamanho base anterior era ~100pt largura. Agora 150pt (+50%).
-ASSINATURA_EXCEL_ANCORA = "AE73"
+# Labels do RT ficam nas linhas 76-79. Assinatura posicionada em AE74
+# para aparecer acima dos labels com espaço visual adequado.
+ASSINATURA_EXCEL_ANCORA = "AE74"
 ASSINATURA_EXCEL_OFFSET_X_PT = 0
-ASSINATURA_EXCEL_OFFSET_Y_PT = -30    # sobe um pouco para ficar acima da linha
+ASSINATURA_EXCEL_OFFSET_Y_PT = 0      # sem offset vertical — âncora já ajustada
 ASSINATURA_EXCEL_LARGURA_PT = 150     # +50% vs antes
 ASSINATURA_EXCEL_ALTURA_PT = 60
 
@@ -158,6 +172,136 @@ def resource_path(rel: str) -> str:
 def asset(nome: str) -> str:
     """Retorna o caminho completo de um arquivo em assets/."""
     return resource_path(os.path.join("assets", nome))
+
+
+def asset_checkbox(nome_base: str) -> str:
+    """
+    Retorna o caminho do arquivo de checkbox, tolerando extensão dupla.
+    O GitHub às vezes sobe arquivos como 'CHECKBOX_X.png.jpeg'.
+    Testa extensões na ordem: .png → .jpeg → .png.jpeg → .jpg
+    """
+    candidatos = [
+        asset(nome_base),                          # ex: CHECKBOX_COM_ESGOTO.png
+        asset(nome_base + ".jpeg"),                # ex: CHECKBOX_COM_ESGOTO.png.jpeg
+        asset(nome_base.replace(".png", ".jpeg")), # ex: CHECKBOX_COM_ESGOTO.jpeg
+        asset(nome_base.replace(".png", ".jpg")),  # ex: CHECKBOX_COM_ESGOTO.jpg
+    ]
+    for c in candidatos:
+        if os.path.exists(c):
+            return c
+    # Retorna o original mesmo sem existir (vai gerar erro descritivo depois)
+    return asset(nome_base)
+
+
+
+def _detectar_posicao_esgoto(xlsx_path, log=None):
+    """
+    Detecta automaticamente a posição dos checkboxes de esgoto no memorial.
+
+    Estratégia:
+      1. Varre ElemConstrutivos procurando a célula com TEXTO_ITEM_ESGOTO.
+      2. Na linha encontrada, identifica colunas "Sim" e "Não".
+      3. No drawing XML, encontra os shapes ancorados nessa linha/coluna.
+
+    Retorna dict:
+      { "linha", "ancora_sim", "ancora_nao", "shape_sim", "shape_nao" }
+    Ou None se não encontrar (app usa CHECKBOX_ANCORA_FALLBACK).
+    """
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+
+    try:
+        wb = load_workbook(xlsx_path, data_only=False, read_only=True)
+        sheet_name = "ElemConstrutivos" if "ElemConstrutivos" in wb.sheetnames else wb.sheetnames[0]
+        ws = wb[sheet_name]
+
+        # Passo 1: encontrar linha pelo texto
+        linha_esgoto = None
+        col_sim = None
+        col_nao = None
+
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value and isinstance(cell.value, str):
+                    if TEXTO_ITEM_ESGOTO in cell.value.lower():
+                        linha_esgoto = cell.row
+                        break
+            if linha_esgoto:
+                break
+
+        if not linha_esgoto:
+            if log:
+                log(f"  \u26a0 Texto nao encontrado no memorial \u2014 usando fallback")
+            wb.close()
+            return None
+
+        # Passo 2: encontrar colunas SIM e NAO na linha detectada
+        for cell in ws[linha_esgoto]:
+            if cell.value and isinstance(cell.value, str):
+                v = cell.value.strip().upper()
+                if v == "SIM" and col_sim is None:
+                    col_sim = cell.column
+                elif v in ("N\u00c3O", "NAO") and col_nao is None:
+                    col_nao = cell.column
+
+        wb.close()
+
+        if not col_sim:
+            if log:
+                log("  \u26a0 Coluna SIM nao encontrada \u2014 usando fallback")
+            return None
+
+        ancora_sim = f"{get_column_letter(col_sim)}{linha_esgoto}"
+        ancora_nao = f"{get_column_letter(col_nao)}{linha_esgoto}" if col_nao else ancora_sim
+
+        if log:
+            log(f"  \u2713 Esgoto detectado: linha {linha_esgoto} | SIM={ancora_sim} NAO={ancora_nao}")
+
+        # Passo 3: localizar shapes no drawing XML
+        shape_sim = None
+        shape_nao = None
+
+        with zipfile.ZipFile(xlsx_path) as z:
+            drawings = [f for f in z.namelist()
+                        if f.startswith("xl/drawings/drawing") and f.endswith(".xml")]
+            for drw in drawings:
+                root = etree.fromstring(z.read(drw))
+                ns_xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+                ns_map = {"xdr": ns_xdr}
+
+                for anchor in root.findall("xdr:twoCellAnchor", ns_map):
+                    sp = anchor.find("xdr:sp", ns_map)
+                    if sp is None:
+                        continue
+                    frm = anchor.find("xdr:from", ns_map)
+                    if frm is None:
+                        continue
+                    row_xml = int(frm.find("xdr:row", ns_map).text) + 1
+                    col_xml = int(frm.find("xdr:col", ns_map).text) + 1
+                    if row_xml != linha_esgoto:
+                        continue
+                    cnv = sp.find(f".//{{{ns_xdr}}}cNvPr")
+                    nome = cnv.get("name", "") if cnv is not None else ""
+                    if col_xml == col_sim:
+                        shape_sim = nome
+                    elif col_nao and col_xml == col_nao:
+                        shape_nao = nome
+
+        if log:
+            log(f"  \u2713 Shapes: SIM='{shape_sim}' NAO='{shape_nao}'")
+
+        return {
+            "linha": linha_esgoto,
+            "ancora_sim": ancora_sim,
+            "ancora_nao": ancora_nao,
+            "shape_sim": shape_sim,
+            "shape_nao": shape_nao,
+        }
+
+    except Exception as e:
+        if log:
+            log(f"  \u26a0 Deteccao automatica falhou ({e}) \u2014 usando fallback")
+        return None
 
 
 def formatar_data_hoje() -> str:
@@ -261,10 +405,10 @@ def _inserir_assinatura_word(doc, img_path, linha_idx, log=None):
         behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">
         <wp:simplePos x="0" y="0"/>
         <wp:positionH relativeFrom="column">
-            <wp:posOffset>457200</wp:posOffset>
+            <wp:posOffset>0</wp:posOffset>
         </wp:positionH>
         <wp:positionV relativeFrom="paragraph">
-            <wp:posOffset>-400000</wp:posOffset>
+            <wp:posOffset>-685800</wp:posOffset>
         </wp:positionV>
         <wp:extent cx="{cx}" cy="{cy}"/>
         <wp:effectExtent l="0" t="0" r="0" b="0"/>
@@ -428,10 +572,15 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
     return shape
 
 
-def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None):
+def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None,
+                               shape_sim=None, shape_nao=None):
     """
     Marca os checkboxes nativos do Excel manipulando diretamente o XML dos shapes.
     Usa lxml (preserva namespaces) para evitar corrupção do arquivo.
+
+    shape_sim / shape_nao: nomes detectados automaticamente por
+    _detectar_posicao_esgoto(). Se None, busca qualquer shape na linha
+    do esgoto que não seja imagem (pic).
 
     Retorna True se conseguiu marcar com sucesso, False caso contrário.
     """
@@ -472,10 +621,14 @@ def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None):
                             nome = cnv_pr.get('name', '')
 
                             # Determinar qual cor aplicar
+                            # Usa nomes detectados automaticamente (shape_sim/shape_nao).
+                            # Fallback: compara com padrão hardcoded se não foram detectados.
                             cor = None
-                            if nome == SHAPE_ESGOTO_SIM:
+                            _sim = shape_sim or "QO012,12.L0C0;L0C-34^"
+                            _nao = shape_nao or "QO012,22.L0C0;L0C-37^"
+                            if nome == _sim:
                                 cor = "000000" if esgoto_sim else "FFFFFF"
-                            elif nome == SHAPE_ESGOTO_NAO:
+                            elif nome == _nao:
                                 cor = "000000" if not esgoto_sim else "FFFFFF"
 
                             if cor is None:
@@ -689,11 +842,20 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
     """
     metodo_usado = "nenhum"
 
+    # --- Detecção automática da posição do checkbox no template ---
+    # Roda uma vez para ambos os métodos (nativo e imagem).
+    # Se o template mudar de versão, a posição é redescoberta aqui.
+    pos = _detectar_posicao_esgoto(xlsx_path, log=log)
+    ancora_img = pos["ancora_sim"] if pos else CHECKBOX_ANCORA_FALLBACK
+    shape_sim  = pos["shape_sim"]  if pos else None
+    shape_nao  = pos["shape_nao"]  if pos else None
+
     # --- Tentar método NATIVO (se modo for nativo ou auto) ---
     if modo_checkbox in ("nativo", "auto"):
         if log:
             log("  • Tentando checkboxes NATIVOS (XML)...")
-        if _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=log):
+        if _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=log,
+                                      shape_sim=shape_sim, shape_nao=shape_nao):
             metodo_usado = "nativo"
             if log:
                 log("  ✓ Checkboxes aplicados via método NATIVO")
@@ -709,7 +871,7 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
     # --- Fallback / modo IMAGEM ---
     if modo_checkbox in ("imagem", "auto"):
         img_nome = CHECKBOX_COM_ESGOTO_IMG if esgoto_sim else CHECKBOX_SEM_ESGOTO_IMG
-        img_path = asset(img_nome)
+        img_path = asset_checkbox(img_nome)
 
         if not os.path.exists(img_path):
             if log:
@@ -732,7 +894,7 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
 
             _inserir_imagem_excel_win32(
                 ws, img_path,
-                CHECKBOX_ANCORA_CELULA,
+                ancora_img,          # posição detectada automaticamente
                 CHECKBOX_OFFSET_X_PT, CHECKBOX_OFFSET_Y_PT,
                 CHECKBOX_LARGURA_PT, CHECKBOX_ALTURA_PT,
             )
