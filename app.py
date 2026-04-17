@@ -866,7 +866,9 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
             }
             for coord, val in mapa.items():
                 try:
-                    ws.Range(coord).Value = val
+                    rng = ws.Range(coord)
+                    rng.Value = val
+                    rng.Font.Color = 0  # preto (RGB 0,0,0)
                 except Exception as e:
                     if log:
                         log(f"  ⚠ Célula {coord} falhou: {e}")
@@ -1416,19 +1418,33 @@ class App(tk.Tk):
 
         self.var_esquina = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            col_dir, text="Lote de esquina",
+            col_dir, text="Lote de esquina (ruas diferentes por casa)",
             variable=self.var_esquina,
             bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
             activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+            command=self._toggle_ruas_esquina,
         ).pack(anchor="w", pady=3)
+        # Frame que aparece só quando esquina=True
+        self.frame_ruas_esquina = tk.Frame(col_dir, bg=COR_FUNDO)
+        tk.Label(self.frame_ruas_esquina,
+                 text="Rua de cada casa (uma por linha):",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 8)).pack(anchor="w")
+        self.txt_ruas_esquina = tk.Text(
+            self.frame_ruas_esquina, height=4,
+            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+            relief="flat", font=("Segoe UI", 9),
+        )
+        self.txt_ruas_esquina.pack(fill="x", pady=(0,3))
+        tk.Label(self.frame_ruas_esquina,
+                 text="Ex:\nRUA DAS FLORES\nAV. BRASIL",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 7)).pack(anchor="w")
 
         self._secao_label(col_dir, "CASAS GEMINADAS")
         _og = ["Não se aplica", "Sim", "Não"]
-        tk.Label(col_dir, text="Loteamentos",
-                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
+        # Loteamentos fixo = Não se aplica (não aparece na UI)
         self.var_gem_lot = tk.StringVar(value="Não se aplica")
-        ttk.Combobox(col_dir, textvariable=self.var_gem_lot, values=_og,
-                     state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0,4))
         tk.Label(col_dir, text="Condomínios",
                  bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
         self.var_gem_cond = tk.StringVar(value="Não se aplica")
@@ -1451,11 +1467,17 @@ class App(tk.Tk):
         ).pack(anchor="w")
 
         self._secao_label(col_dir, "LOG")
+        frame_log = tk.Frame(col_dir, bg=COR_LOG_FUNDO)
+        frame_log.pack(fill="both", expand=True, pady=3)
+        sb_log = tk.Scrollbar(frame_log, orient="vertical")
+        sb_log.pack(side="right", fill="y")
         self.txt_log = tk.Text(
-            col_dir, height=10, bg=COR_LOG_FUNDO, fg=COR_LOG_TEXTO,
+            frame_log, height=10, bg=COR_LOG_FUNDO, fg=COR_LOG_TEXTO,
             font=("Consolas", 9), relief="flat",
+            yscrollcommand=sb_log.set,
         )
-        self.txt_log.pack(fill="both", expand=True, pady=3)
+        self.txt_log.pack(side="left", fill="both", expand=True)
+        sb_log.config(command=self.txt_log.yview)
 
         self._secao_label(col_dir, "PROGRESSO")
         self.progress = ttk.Progressbar(col_dir, mode="determinate", length=400)
@@ -1644,6 +1666,24 @@ class App(tk.Tk):
 
         buscar_cep(cep, ok, erro)
 
+    def _toggle_ruas_esquina(self):
+        """Mostra/oculta campo de ruas quando lote de esquina é marcado."""
+        if self.var_esquina.get():
+            self.frame_ruas_esquina.pack(fill="x", pady=(0,6))
+        else:
+            self.frame_ruas_esquina.pack_forget()
+
+    def _get_rua_casa(self, num_casa):
+        """Retorna a rua da casa N se lote de esquina, senão retorna o logradouro padrão."""
+        if not self.var_esquina.get():
+            return self.var_logradouro.get()
+        linhas = [l.strip() for l in
+                  self.txt_ruas_esquina.get("1.0","end").strip().split("\n")
+                  if l.strip()]
+        if num_casa - 1 < len(linhas):
+            return linhas[num_casa - 1]
+        return self.var_logradouro.get()  # fallback
+
     def _check_stop(self):
         """Levanta exceção se o usuário solicitou parada."""
         if self.stop_event.is_set():
@@ -1670,7 +1710,7 @@ class App(tk.Tk):
                 "crea": self.var_crea.get(),
                 "art": self.var_art.get(),
                 "contratante": self.var_contratante.get(),
-                "logradouro": self.var_logradouro.get(),
+                "logradouro": self._get_rua_casa(1),  # atualizado por casa no loop
                 "quadra_lote": self.var_quadra_lote.get(),
                 "bairro": self.var_bairro.get(),
                 "cep": self.var_cep.get(),
@@ -1702,12 +1742,11 @@ class App(tk.Tk):
             else:
                 template_excel = template_excel_orig
 
-            # Pasta destino
-            data_str = datetime.date.today().strftime("%Y-%m-%d")
+            # Pasta destino — sem subpasta de data
             rua_qd_lt = f"{dados['logradouro']} {dados['quadra_lote']}".strip()
             rua_qd_lt = re.sub(r"[<>:\"/\\|?*]", "", rua_qd_lt)  # sanitizar
             pasta_saida = (
-                Path.home() / "Downloads" / PASTA_DESTINO / data_str / rua_qd_lt
+                Path.home() / "Downloads" / PASTA_DESTINO / rua_qd_lt
             )
             pasta_saida.mkdir(parents=True, exist_ok=True)
             self.log(f"📁 Pasta destino: {pasta_saida}")
@@ -1719,6 +1758,7 @@ class App(tk.Tk):
                 self._check_stop()
                 self._set_status(f"Casa {i}/{qtd}...")
                 self.log(f"\n═══ CASA {i} ═══")
+                dados["logradouro"] = self._get_rua_casa(i)
 
                 base_nome = f"CASA_{i:02d}"
 
