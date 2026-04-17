@@ -23,7 +23,7 @@ Correções v4.1:
 - CHECKBOX_ANCORA_CELULA corrigida de AR55 → AM70 (posição real no drawing XML)
 - CHECKBOX_LARGURA_PT/ALTURA_PT ajustados para cobrir AM70:AP70 corretamente
 - asset_checkbox() adicionada: fallback automático de extensão (.png/.jpeg/.png.jpeg)
-- ASSINATURA_EXCEL_ANCORA ajustada de AE73 → AE74 (sem offset negativo frágil)
+- ASSINATURA_EXCEL_ANCORA ajustada de AE72 → AE74 (sem offset negativo frágil)
 - Assinatura Word: posOffset corrigido para 0/−685800 (alinha à esquerda da coluna)
 - SHAPE_ESGOTO_SIM/NAO confirmados via inspeção do drawing1.xml do template real
 - UF padrão mantido como GO (OCR descartado — preenchimento manual preferido)
