@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 BERÇAN PROJETOS — Preenchimento Automático de Documentos CAIXA
-Versão 4.4 — Abril/2026
+Versão 4.5 — Abril/2026
 
 Correções v4 (original):
 - Assinatura Memorial (Excel) via win32com com qualidade preservada (+50% tamanho)
@@ -23,7 +23,7 @@ Correções v4.1:
 - CHECKBOX_ANCORA_CELULA corrigida de AR55 → AM70 (posição real no drawing XML)
 - CHECKBOX_LARGURA_PT/ALTURA_PT ajustados para cobrir AM70:AP70 corretamente
 - asset_checkbox() adicionada: fallback automático de extensão (.png/.jpeg/.png.jpeg)
-- ASSINATURA_EXCEL_ANCORA ajustada de AE72 → AE74 (sem offset negativo frágil)
+- ASSINATURA_EXCEL_ANCORA ajustada de AE73 → AE74 (sem offset negativo frágil)
 - Assinatura Word: posOffset corrigido para 0/−685800 (alinha à esquerda da coluna)
 - SHAPE_ESGOTO_SIM/NAO confirmados via inspeção do drawing1.xml do template real
 - UF padrão mantido como GO (OCR descartado — preenchimento manual preferido)
@@ -103,19 +103,24 @@ CHECKBOX_ALTURA_PT = 14            # altura de uma linha
 # Se o texto mudar na nova versão do memorial, atualizar apenas aqui.
 TEXTO_ITEM_ESGOTO = "sistema público de coleta de esgoto sanitário"
 
+# Checkboxes de casas geminadas — opções: "sim", "nao", "nao_se_aplica"
+# Shapes confirmados via drawing1.xml:
+#   Loteamentos  linha 64: SIM=QOCI,13... | NAO=QOCI,23... | NSA=QOCI,33...
+#   Condomínios  linha 65: SIM=QOCN,13... | NAO=QOCN,23... | NSA=QOCN,33...
+GEMINADAS_LOTEAMENTOS = "nao_se_aplica"
+GEMINADAS_CONDOMINIOS = "nao_se_aplica"
+
+
 # ----- Assinatura Word (DECLARAÇÃO) — +50% v4 -----
 # Antes: Inches(1.8). Agora: Inches(2.7) — aumento proporcional de 50%.
 ASSINATURA_WORD_LARGURA = Inches(2.7)
 
-# ----- Assinatura Excel (MEMORIAL) — +50% v4 -----
-# Antes inserida via openpyxl (perdia qualidade). Agora via win32com Shapes.
-# Labels do RT ficam nas linhas 76-79. Assinatura posicionada em AE74
-# para aparecer acima dos labels com espaço visual adequado.
-ASSINATURA_EXCEL_ANCORA = "AE74"
-ASSINATURA_EXCEL_OFFSET_X_PT = 0
-ASSINATURA_EXCEL_OFFSET_Y_PT = 0      # sem offset vertical — âncora já ajustada
-ASSINATURA_EXCEL_LARGURA_PT = 150     # +50% vs antes
-ASSINATURA_EXCEL_ALTURA_PT = 60
+# ----- Assinatura Excel (MEMORIAL) — calibrado 17/04/2026 -----
+ASSINATURA_EXCEL_ANCORA      = "AE72"
+ASSINATURA_EXCEL_OFFSET_X_PT = 10
+ASSINATURA_EXCEL_OFFSET_Y_PT = -5
+ASSINATURA_EXCEL_LARGURA_PT  = 170
+ASSINATURA_EXCEL_ALTURA_PT   = 55
 
 # ----- Engenheiros cadastrados -----
 ENGENHEIROS = {
@@ -662,6 +667,20 @@ def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None,
                                 cor = "000000" if esgoto_sim else "FFFFFF"
                             elif nome == _nao:
                                 cor = "000000" if not esgoto_sim else "FFFFFF"
+                            # Geminadas loteamentos (linha 64)
+                            elif nome == "QOCI,13.L0C-32;L0C-34^":
+                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "sim" else "FFFFFF"
+                            elif nome == "QOCI,23.L0C-35;L0C-37^":
+                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "nao" else "FFFFFF"
+                            elif nome == "QOCI,33.L0C-38;L0C-40^":
+                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "nao_se_aplica" else "FFFFFF"
+                            # Geminadas condomínios (linha 65)
+                            elif nome == "QOCN,13.L0C-32;L0C-34^":
+                                cor = "000000" if GEMINADAS_CONDOMINIOS == "sim" else "FFFFFF"
+                            elif nome == "QOCN,23.L0C-35;L0C-37^":
+                                cor = "000000" if GEMINADAS_CONDOMINIOS == "nao" else "FFFFFF"
+                            elif nome == "QOCN,33.L0C-38;L0C-40^":
+                                cor = "000000" if GEMINADAS_CONDOMINIOS == "nao_se_aplica" else "FFFFFF"
 
                             if cor is None:
                                 continue
@@ -729,6 +748,21 @@ def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None,
         if log:
             log(f"  ✗ Falha no método nativo: {e}")
         return False
+
+
+def _fechar_excel(xl, wb):
+    """Fecha wb e xl com segurança — sempre mata EXCEL.EXE."""
+    if wb is not None:
+        try: wb.Close(SaveChanges=False)
+        except Exception: pass
+    if xl is not None:
+        try: xl.Quit()
+        except Exception: pass
+        try:
+            import subprocess
+            subprocess.run(["taskkill", "/F", "/IM", "EXCEL.EXE"],
+                           capture_output=True, creationflags=0x08000000)
+        except Exception: pass
 
 
 def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
@@ -825,16 +859,7 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
         wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)
 
     finally:
-        if wb is not None:
-            try:
-                wb.Close(SaveChanges=False)
-            except Exception:
-                pass
-        if xl is not None:
-            try:
-                xl.Quit()
-            except Exception:
-                pass
+        _fechar_excel(xl, wb)
         pythoncom.CoUninitialize()
 
 
@@ -917,16 +942,7 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
             if log:
                 log(f"  ⚠ Falha ao inserir imagem de checkbox: {e}")
         finally:
-            if wb is not None:
-                try:
-                    wb.Close(SaveChanges=False)
-                except Exception:
-                    pass
-            if xl is not None:
-                try:
-                    xl.Quit()
-                except Exception:
-                    pass
+            _fechar_excel(xl, wb)
             pythoncom.CoUninitialize()
 
     return metodo_usado
@@ -966,16 +982,7 @@ def _excel_para_pdf(xlsx_path, pdf_path, log=None):
             log(f"  ✓ PDF gerado: {os.path.basename(pdf_path)}")
 
     finally:
-        if wb is not None:
-            try:
-                wb.Close(SaveChanges=False)
-            except Exception:
-                pass
-        if xl is not None:
-            try:
-                xl.Quit()
-            except Exception:
-                pass
+        _fechar_excel(xl, wb)
         pythoncom.CoUninitialize()
 
 
@@ -1390,6 +1397,19 @@ class App(tk.Tk):
             activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
         ).pack(anchor="w", pady=3)
 
+        self._secao_label(col_dir, "CASAS GEMINADAS")
+        _og = ["Não se aplica", "Sim", "Não"]
+        tk.Label(col_dir, text="Loteamentos",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
+        self.var_gem_lot = tk.StringVar(value="Não se aplica")
+        ttk.Combobox(col_dir, textvariable=self.var_gem_lot, values=_og,
+                     state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0,4))
+        tk.Label(col_dir, text="Condomínios",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
+        self.var_gem_cond = tk.StringVar(value="Não se aplica")
+        ttk.Combobox(col_dir, textvariable=self.var_gem_cond, values=_og,
+                     state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0,4))
+
         self._secao_label(col_dir, "QUANTIDADE DE CASAS")
         self.var_qtd_casas = tk.IntVar(value=1)
         tk.Spinbox(
@@ -1614,6 +1634,12 @@ class App(tk.Tk):
             esgoto_sim = self.var_esgoto.get()
             modo_checkbox = self.var_modo_checkbox.get()
             modo_mapeado = True  # sempre modo mapeado (não mapeado removido)
+
+            # Atualizar constantes globais de geminadas
+            _mg = {"Não se aplica": "nao_se_aplica", "Sim": "sim", "Não": "nao"}
+            global GEMINADAS_LOTEAMENTOS, GEMINADAS_CONDOMINIOS
+            GEMINADAS_LOTEAMENTOS = _mg.get(self.var_gem_lot.get(), "nao_se_aplica")
+            GEMINADAS_CONDOMINIOS = _mg.get(self.var_gem_cond.get(), "nao_se_aplica")
             qtd = self.var_qtd_casas.get()
             template_excel_orig = self.var_memorial.get()
 
