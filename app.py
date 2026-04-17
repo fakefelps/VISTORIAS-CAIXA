@@ -117,28 +117,28 @@ CHECKBOX_SEM_ESGOTO_IMG = "CHECKBOX_SEM_ESGOTO.png"
 # 4 estados independentes: ancora + offset + tamanho
 # Estado 1: Esgoto SIM
 CHK1_ANCORA  = "AM70"
-CHK1_OFF_X   = -8
-CHK1_OFF_Y   = -7
+CHK1_OFF_X   = 10
+CHK1_OFF_Y   = 3
 CHK1_LARGURA = 4
-CHK1_ALTURA  = 4
+CHK1_ALTURA  = 5
 # Estado 2: Esgoto NÃO
 CHK2_ANCORA  = "AP70"
-CHK2_OFF_X   = -9
-CHK2_OFF_Y   = -7
+CHK2_OFF_X   = 11
+CHK2_OFF_Y   = 3
 CHK2_LARGURA = 4
-CHK2_ALTURA  = 4
+CHK2_ALTURA  = 5
 # Estado 3: Condomínio SIM
 CHK3_ANCORA  = "AM65"
-CHK3_OFF_X   = -8
-CHK3_OFF_Y   = -12
+CHK3_OFF_X   = 10
+CHK3_OFF_Y   = 8
 CHK3_LARGURA = 4
-CHK3_ALTURA  = 4
+CHK3_ALTURA  = 5
 # Estado 4: Condomínio Não se aplica
 CHK4_ANCORA  = "AS65"
-CHK4_OFF_X   = -10
-CHK4_OFF_Y   = -12
+CHK4_OFF_X   = 12
+CHK4_OFF_Y   = 8
 CHK4_LARGURA = 4
-CHK4_ALTURA  = 4
+CHK4_ALTURA  = 5
 # Fallback de ancora para detecção automática
 CHECKBOX_ANCORA_FALLBACK = "AM70"
 
