@@ -51,6 +51,31 @@ from io import BytesIO
 from copy import deepcopy
 
 import tkinter as tk
+
+def buscar_cep(cep, callback_ok, callback_erro):
+    """
+    Consulta ViaCEP em thread separada e chama callback com o resultado.
+    callback_ok(data): dict com logradouro, bairro, localidade, uf
+    callback_erro(msg): string com mensagem de erro
+    """
+    import urllib.request, json, threading
+    cep_limpo = re.sub(r"[^0-9]", "", cep)
+    if len(cep_limpo) != 8:
+        callback_erro("CEP deve ter 8 dígitos")
+        return
+    def _worker():
+        try:
+            url = f"https://viacep.com.br/ws/{cep_limpo}/json/"
+            with urllib.request.urlopen(url, timeout=5) as r:
+                data = json.loads(r.read().decode())
+            if data.get("erro"):
+                callback_erro("CEP não encontrado")
+            else:
+                callback_ok(data)
+        except Exception as e:
+            callback_erro(f"Erro na consulta: {e}")
+    threading.Thread(target=_worker, daemon=True).start()
+
 from tkinter import ttk, filedialog, messagebox
 
 # Word
@@ -88,15 +113,34 @@ ESGOTO_LINHA_ASS = 41
 CHECKBOX_COM_ESGOTO_IMG = "CHECKBOX_COM_ESGOTO.png"
 CHECKBOX_SEM_ESGOTO_IMG = "CHECKBOX_SEM_ESGOTO.png"
 
-# ----- Checkboxes — posicionamento (fallback se detecção automática falhar) -----
-# Estes valores são usados APENAS se _detectar_linha_esgoto() não encontrar o texto.
-# Em condições normais, a posição é detectada automaticamente a cada execução,
-# então uma nova versão do memorial não quebra o app.
-CHECKBOX_ANCORA_FALLBACK = "AM70"  # fallback: posição conhecida no memorial V072
-CHECKBOX_OFFSET_X_PT = 0
-CHECKBOX_OFFSET_Y_PT = 0
-CHECKBOX_LARGURA_PT = 85           # cobre célula SIM + célula NÃO (~85pt)
-CHECKBOX_ALTURA_PT = 14            # altura de uma linha
+# ----- Checkboxes imagem — valores calibrados 17/04/2026 -----
+# 4 estados independentes: ancora + offset + tamanho
+# Estado 1: Esgoto SIM
+CHK1_ANCORA  = "AM70"
+CHK1_OFF_X   = 11
+CHK1_OFF_Y   = 4
+CHK1_LARGURA = 5
+CHK1_ALTURA  = 5
+# Estado 2: Esgoto NÃO
+CHK2_ANCORA  = "AP70"
+CHK2_OFF_X   = 12
+CHK2_OFF_Y   = 4
+CHK2_LARGURA = 5
+CHK2_ALTURA  = 5
+# Estado 3: Condomínio SIM
+CHK3_ANCORA  = "AM65"
+CHK3_OFF_X   = 11
+CHK3_OFF_Y   = 10
+CHK3_LARGURA = 5
+CHK3_ALTURA  = 5
+# Estado 4: Condomínio Não se aplica
+CHK4_ANCORA  = "AS65"
+CHK4_OFF_X   = 13
+CHK4_OFF_Y   = 10
+CHK4_LARGURA = 5
+CHK4_ALTURA  = 5
+# Fallback de ancora para detecção automática
+CHECKBOX_ANCORA_FALLBACK = "AM70"
 
 # ----- Texto usado para localizar a linha do esgoto automaticamente -----
 # A detecção varre a planilha procurando este fragmento (case-insensitive).
@@ -863,6 +907,15 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
         pythoncom.CoUninitialize()
 
 
+def _quadrado_preto_temp():
+    """Gera PNG temporário de quadrado preto sólido (■)."""
+    import tempfile
+    from PIL import Image
+    tmp = tempfile.mktemp(suffix=".png")
+    Image.new("RGBA", (20, 20), (0, 0, 0, 255)).save(tmp)
+    return tmp
+
+
 def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
     """
     Aplica a marcação de esgoto SIM/NÃO no Memorial.
@@ -874,76 +927,55 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
 
     Retorna string com o método que funcionou: "nativo", "imagem" ou "nenhum".
     """
-    metodo_usado = "nenhum"
+    metodo_usado = "imagem"
 
-    # --- Detecção automática da posição do checkbox no template ---
-    # Roda uma vez para ambos os métodos (nativo e imagem).
-    # Se o template mudar de versão, a posição é redescoberta aqui.
-    pos = _detectar_posicao_esgoto(xlsx_path, log=log)
-    ancora_img = pos["ancora_sim"] if pos else CHECKBOX_ANCORA_FALLBACK
-    shape_sim  = pos["shape_sim"]  if pos else None
-    shape_nao  = pos["shape_nao"]  if pos else None
+    # Inserir quadrado preto calibrado para cada estado
+    # Estado determinado por esgoto_sim + geminadas
+    q_preto = _quadrado_preto_temp()
 
-    # --- Tentar método NATIVO (se modo for nativo ou auto) ---
-    if modo_checkbox in ("nativo", "auto"):
-        if log:
-            log("  • Tentando checkboxes NATIVOS (XML)...")
-        if _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=log,
-                                      shape_sim=shape_sim, shape_nao=shape_nao):
-            metodo_usado = "nativo"
-            if log:
-                log("  ✓ Checkboxes aplicados via método NATIVO")
-            if modo_checkbox == "nativo":
-                return metodo_usado
-            # Se for "auto" e nativo deu certo, PARA aqui (não sobrepõe imagem)
-            return metodo_usado
-        elif modo_checkbox == "nativo":
-            if log:
-                log("  ⚠ Método nativo falhou e modo é 'nativo' — sem marcação")
-            return metodo_usado
-
-    # --- Fallback / modo IMAGEM ---
-    if modo_checkbox in ("imagem", "auto"):
-        img_nome = CHECKBOX_COM_ESGOTO_IMG if esgoto_sim else CHECKBOX_SEM_ESGOTO_IMG
-        img_path = asset_checkbox(img_nome)
-
-        if not os.path.exists(img_path):
-            if log:
-                log(f"  ⚠ Imagem de checkbox não encontrada: {img_nome}")
-            return metodo_usado
-
-        # Abre o xlsx via win32com só para sobrepor a imagem
-        pythoncom.CoInitialize()
-        xl = None
-        wb = None
+    pythoncom.CoInitialize()
+    xl = None
+    wb = None
+    try:
+        xl = win32com.client.Dispatch("Excel.Application")
+        try: xl.Visible = False
+        except Exception: pass
+        try: xl.DisplayAlerts = False
+        except Exception: pass
+        wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
         try:
-            xl = win32com.client.Dispatch("Excel.Application")
-            try: xl.Visible = False
-            except Exception: pass
-            try: xl.DisplayAlerts = False
-            except Exception: pass
-            wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
-            try:
-                ws = wb.Worksheets("ElemConstrutivos")
-            except Exception:
-                ws = wb.Worksheets(1)
+            ws = wb.Worksheets("ElemConstrutivos")
+        except Exception:
+            ws = wb.Worksheets(1)
 
-            _inserir_imagem_excel_win32(
-                ws, img_path,
-                ancora_img,          # posição detectada automaticamente
-                CHECKBOX_OFFSET_X_PT, CHECKBOX_OFFSET_Y_PT,
-                CHECKBOX_LARGURA_PT, CHECKBOX_ALTURA_PT,
-            )
-            wb.Save()
-            metodo_usado = "imagem"
-            if log:
-                log(f"  ✓ Checkboxes aplicados via IMAGEM ({'COM' if esgoto_sim else 'SEM'} esgoto)")
-        except Exception as e:
-            if log:
-                log(f"  ⚠ Falha ao inserir imagem de checkbox: {e}")
-        finally:
-            _fechar_excel(xl, wb)
-            pythoncom.CoUninitialize()
+        # Estado 1 ou 2: esgoto
+        if esgoto_sim:
+            _inserir_imagem_excel_win32(ws, q_preto, CHK1_ANCORA,
+                                        CHK1_OFF_X, CHK1_OFF_Y, CHK1_LARGURA, CHK1_ALTURA)
+            if log: log(f"  ✓ Checkbox esgoto SIM inserido em {CHK1_ANCORA}")
+        else:
+            _inserir_imagem_excel_win32(ws, q_preto, CHK2_ANCORA,
+                                        CHK2_OFF_X, CHK2_OFF_Y, CHK2_LARGURA, CHK2_ALTURA)
+            if log: log(f"  ✓ Checkbox esgoto NÃO inserido em {CHK2_ANCORA}")
+
+        # Estado 3 ou 4: condomínios
+        if GEMINADAS_CONDOMINIOS == "sim":
+            _inserir_imagem_excel_win32(ws, q_preto, CHK3_ANCORA,
+                                        CHK3_OFF_X, CHK3_OFF_Y, CHK3_LARGURA, CHK3_ALTURA)
+            if log: log(f"  ✓ Checkbox condomínio SIM inserido em {CHK3_ANCORA}")
+        elif GEMINADAS_CONDOMINIOS == "nao_se_aplica":
+            _inserir_imagem_excel_win32(ws, q_preto, CHK4_ANCORA,
+                                        CHK4_OFF_X, CHK4_OFF_Y, CHK4_LARGURA, CHK4_ALTURA)
+            if log: log(f"  ✓ Checkbox condomínio NSA inserido em {CHK4_ANCORA}")
+
+        wb.Save()
+        if log: log("  ✓ Checkboxes inseridos")
+
+    except Exception as e:
+        if log: log(f"  ⚠ Falha ao inserir checkboxes: {e}")
+    finally:
+        _fechar_excel(xl, wb)
+        pythoncom.CoUninitialize()
 
     return metodo_usado
 
@@ -1330,6 +1362,27 @@ class App(tk.Tk):
         self.var_contratante = tk.StringVar()
         self._campo_simples(col_esq, self.var_contratante, "Contratante")
 
+        # CEP com botão de busca automática — PRIMEIRO para auto-preencher
+        self.var_cep = tk.StringVar()
+        # CEP com botão de busca automática
+        tk.Label(col_esq, text="CEP",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
+        frame_cep = tk.Frame(col_esq, bg=COR_FUNDO)
+        frame_cep.pack(fill="x", pady=(0, 3))
+        tk.Entry(frame_cep, textvariable=self.var_cep,
+                 bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+                 relief="flat", font=("Segoe UI", 10),
+                 width=12).pack(side="left")
+        tk.Button(frame_cep, text="🔍 Buscar CEP",
+                  command=self._buscar_cep,
+                  bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
+                  font=("Segoe UI", 9, "bold"),
+                  ).pack(side="left", padx=(6, 0))
+        self.lbl_cep_status = tk.Label(frame_cep, text="",
+                  bg=COR_FUNDO, fg=COR_LOG_TEXTO,
+                  font=("Segoe UI", 8))
+        self.lbl_cep_status.pack(side="left", padx=(6, 0))
+
         self.var_logradouro = tk.StringVar()
         self._campo_simples(col_esq, self.var_logradouro, "Logradouro")
 
@@ -1338,9 +1391,6 @@ class App(tk.Tk):
 
         self.var_bairro = tk.StringVar()
         self._campo_simples(col_esq, self.var_bairro, "Bairro")
-
-        self.var_cep = tk.StringVar()
-        self._campo_simples(col_esq, self.var_cep, "CEP")
 
         self.var_cidade = tk.StringVar()
         self._campo_simples(col_esq, self.var_cidade, "Cidade")
@@ -1363,31 +1413,6 @@ class App(tk.Tk):
         ).pack(anchor="w", padx=20)
 
         # Modo dos checkboxes (NOVO v4 — híbrido)
-        self._secao_label(col_dir, "MÉTODO DE MARCAÇÃO DOS CHECKBOXES")
-        self.var_modo_checkbox = tk.StringVar(value="auto")
-        frame_chk = tk.Frame(col_dir, bg=COR_FUNDO)
-        frame_chk.pack(anchor="w", pady=3)
-        tk.Radiobutton(
-            frame_chk, text="Auto (tenta nativo, fallback imagem)",
-            variable=self.var_modo_checkbox, value="auto",
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
-            font=("Segoe UI", 9),
-        ).pack(anchor="w")
-        tk.Radiobutton(
-            frame_chk, text="Nativo (manipula shapes do Excel)",
-            variable=self.var_modo_checkbox, value="nativo",
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
-            font=("Segoe UI", 9),
-        ).pack(anchor="w")
-        tk.Radiobutton(
-            frame_chk, text="Imagem (sobrepõe PNG)",
-            variable=self.var_modo_checkbox, value="imagem",
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
-            font=("Segoe UI", 9),
-        ).pack(anchor="w")
 
         self.var_esquina = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -1596,6 +1621,29 @@ class App(tk.Tk):
 
         threading.Thread(target=self._processar, daemon=True).start()
 
+    def _buscar_cep(self):
+        """Consulta ViaCEP e preenche logradouro, bairro, cidade e UF."""
+        cep = self.var_cep.get().strip()
+        self.lbl_cep_status.configure(text="⏳ buscando...", fg=COR_TEXTO_SEC)
+
+        def ok(data):
+            self.after(0, self.var_logradouro.set,
+                       data.get("logradouro", "").upper())
+            self.after(0, self.var_bairro.set,
+                       data.get("bairro", "").upper())
+            self.after(0, self.var_cidade.set,
+                       data.get("localidade", "").upper())
+            self.after(0, self.var_uf.set,
+                       data.get("uf", "GO").upper())
+            self.after(0, self.lbl_cep_status.configure,
+                       {"text": "✓ preenchido!", "fg": COR_LOG_TEXTO})
+
+        def erro(msg):
+            self.after(0, self.lbl_cep_status.configure,
+                       {"text": f"✗ {msg}", "fg": "#e74c3c"})
+
+        buscar_cep(cep, ok, erro)
+
     def _check_stop(self):
         """Levanta exceção se o usuário solicitou parada."""
         if self.stop_event.is_set():
@@ -1632,7 +1680,7 @@ class App(tk.Tk):
             }
 
             esgoto_sim = self.var_esgoto.get()
-            modo_checkbox = self.var_modo_checkbox.get()
+            modo_checkbox = "imagem"  # fixo — método calibrado
             modo_mapeado = True  # sempre modo mapeado (não mapeado removido)
 
             # Atualizar constantes globais de geminadas
