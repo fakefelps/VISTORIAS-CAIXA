@@ -1313,13 +1313,35 @@ class App(tk.Tk):
         header = tk.Frame(self, bg=COR_FUNDO)
         header.pack(fill="x", padx=20, pady=(20, 10))
 
+        # Logo + título lado a lado
+        header_inner = tk.Frame(header, bg=COR_FUNDO)
+        header_inner.pack(anchor="w")
+
+        # Logo (carrega LOGO.png dos assets)
+        self._logo_img = None
+        try:
+            from PIL import Image, ImageTk
+            logo_path = asset("LOGO.png")
+            if not os.path.exists(logo_path):
+                logo_path = asset("LOGO.jpg")
+            if os.path.exists(logo_path):
+                img = Image.open(logo_path).convert("RGBA")
+                img = img.resize((52, 52), Image.LANCZOS)
+                self._logo_img = ImageTk.PhotoImage(img)
+                tk.Label(header_inner, image=self._logo_img,
+                         bg=COR_FUNDO).pack(side="left", padx=(0, 12))
+        except Exception:
+            pass  # sem logo, continua normal
+
+        texto_frame = tk.Frame(header_inner, bg=COR_FUNDO)
+        texto_frame.pack(side="left")
         tk.Label(
-            header, text="BERÇAN PROJETOS",
+            texto_frame, text="BERÇAN PROJETOS",
             font=("Segoe UI", 18, "bold"),
             fg=COR_TEXTO, bg=COR_FUNDO,
         ).pack(anchor="w")
         tk.Label(
-            header, text="Preenchimento Automático de Documentos",
+            texto_frame, text="Preenchimento Automático de Documentos",
             font=("Segoe UI", 10),
             fg=COR_TEXTO_SEC, bg=COR_FUNDO,
         ).pack(anchor="w")
