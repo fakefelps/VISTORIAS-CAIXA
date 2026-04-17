@@ -1432,6 +1432,11 @@ class App(tk.Tk):
             canvas_dir.configure(scrollregion=canvas_dir.bbox("all"))
             canvas_dir.itemconfig(wid_dir, width=canvas_dir.winfo_width())
         scroll_frame.bind("<Configure>", _on_cf)
+        # Forçar render inicial
+        self.after(50, lambda: canvas_dir.configure(
+            scrollregion=canvas_dir.bbox("all")))
+        self.after(100, lambda: canvas_dir.itemconfig(
+            wid_dir, width=canvas_dir.winfo_width()))
         canvas_dir.bind("<MouseWheel>",
             lambda e: canvas_dir.yview_scroll(int(-1*(e.delta/120)), "units"))
         scroll_frame.bind("<MouseWheel>",
@@ -1450,27 +1455,22 @@ class App(tk.Tk):
         # ── 2. LOTE DE ESQUINA ──
         self._secao_label(p, "LOTE")
         self.var_esquina = tk.BooleanVar(value=False)
-        tk.Checkbutton(
+        self._chk_esquina_widget = tk.Checkbutton(
             p, text="Lote de esquina (frente para mais de uma rua)",
             variable=self.var_esquina,
             bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
             activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
             command=self._toggle_ruas_esquina,
-        ).pack(anchor="w", pady=3)
-        # Frame de ruas — aparece logo abaixo ao marcar esquina
-        self.frame_ruas_esquina = tk.Frame(p, bg=COR_FUNDO)
-        tk.Label(self.frame_ruas_esquina,
-                 text="Rua de cada casa (uma por linha, na ordem das casas):",
-                 bg=COR_FUNDO, fg=COR_TEXTO_SEC,
-                 font=("Segoe UI", 8)).pack(anchor="w")
-        self.txt_ruas_esquina = tk.Text(
-            self.frame_ruas_esquina, height=4,
-            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
-            relief="flat", font=("Segoe UI", 9),
         )
-        self.txt_ruas_esquina.pack(fill="x", pady=(2, 3))
-        self.txt_ruas_esquina.bind("<MouseWheel>",
-            lambda e: canvas_dir.yview_scroll(int(-1*(e.delta/120)), "units"))
+        self._chk_esquina_widget.pack(anchor="w", pady=3)
+        # Frame de ruas — campos dinâmicos (um por casa)
+        self.frame_ruas_esquina = tk.Frame(p, bg=COR_FUNDO)
+        self._canvas_dir = canvas_dir  # referência para scroll
+        self._p_dir = p                # referência para criar campos
+        self._entries_ruas = []        # lista de Entry, um por casa
+        # Tracer: recria campos quando qtd_casas muda
+        self.var_qtd_casas.trace_add("write",
+            lambda *_: self.after(100, self._rebuild_ruas_esquina))
 
         # ── 3. OPÇÕES ──
         self._secao_label(p, "OPÇÕES")
@@ -1676,22 +1676,55 @@ class App(tk.Tk):
         buscar_cep(cep, ok, erro)
 
     def _toggle_ruas_esquina(self):
-        """Mostra/oculta campo de ruas quando lote de esquina é marcado."""
+        """Mostra/oculta e reconstrói campos de rua por casa."""
         if self.var_esquina.get():
-            self.frame_ruas_esquina.pack(fill="x", pady=(0,6))
+            self._rebuild_ruas_esquina()
+            self.frame_ruas_esquina.pack(fill="x", pady=(0, 6),
+                                         after=self._chk_esquina_widget)
         else:
             self.frame_ruas_esquina.pack_forget()
 
+    def _rebuild_ruas_esquina(self):
+        """Reconstrói um Entry por casa dentro do frame_ruas_esquina."""
+        if not self.var_esquina.get():
+            return
+        # Limpar campos anteriores
+        for w in self.frame_ruas_esquina.winfo_children():
+            w.destroy()
+        self._entries_ruas = []
+        try:
+            qtd = int(self.var_qtd_casas.get())
+        except:
+            qtd = 1
+        for i in range(1, qtd + 1):
+            tk.Label(self.frame_ruas_esquina,
+                     text=f"Rua — Casa {i}:",
+                     bg=COR_FUNDO, fg=COR_TEXTO_SEC,
+                     font=("Segoe UI", 8)).pack(anchor="w")
+            var_rua = tk.StringVar()
+            e = tk.Entry(self.frame_ruas_esquina,
+                         textvariable=var_rua,
+                         bg=COR_CAMPO, fg=COR_TEXTO,
+                         insertbackground=COR_TEXTO,
+                         relief="flat", font=("Segoe UI", 10))
+            e.pack(fill="x", pady=(0, 4))
+            e.bind("<MouseWheel>", lambda ev:
+                   self._canvas_dir.yview_scroll(
+                       int(-1*(ev.delta/120)), "units"))
+            self._entries_ruas.append(var_rua)
+        # Forçar atualização do canvas
+        self.after(50, lambda: self._canvas_dir.configure(
+            scrollregion=self._canvas_dir.bbox("all")))
+
     def _get_rua_casa(self, num_casa):
-        """Retorna a rua da casa N se lote de esquina, senão retorna o logradouro padrão."""
+        """Retorna a rua da casa N (campo individual) ou logradouro padrão."""
         if not self.var_esquina.get():
             return self.var_logradouro.get()
-        linhas = [l.strip() for l in
-                  self.txt_ruas_esquina.get("1.0","end").strip().split("\n")
-                  if l.strip()]
-        if num_casa - 1 < len(linhas):
-            return linhas[num_casa - 1]
-        return self.var_logradouro.get()  # fallback
+        idx = num_casa - 1
+        if idx < len(self._entries_ruas):
+            val = self._entries_ruas[idx].get().strip()
+            return val if val else self.var_logradouro.get()
+        return self.var_logradouro.get()
 
     def _check_stop(self):
         """Levanta exceção se o usuário solicitou parada."""
