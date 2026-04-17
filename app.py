@@ -1400,34 +1400,67 @@ class App(tk.Tk):
         self.var_uf = tk.StringVar(value="GO")
         self._campo_simples(col_esq, self.var_uf, "UF")
 
-        # --- Coluna direita ---
-        self._secao_label(col_dir, "OPÇÕES")
-        self.var_esgoto = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            col_dir, text="Sistema público de esgoto (SIM)",
-            variable=self.var_esgoto,
-            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
-            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+        # --- Coluna direita com Canvas+Scroll para todo o conteúdo ---
+        # Botões fixos no rodapé (fora do scroll)
+        frame_botoes = tk.Frame(col_dir, bg=COR_FUNDO)
+        frame_botoes.pack(side="bottom", fill="x", pady=(6,0))
+        self.btn_gerar = tk.Button(
+            frame_botoes, text="⚡ GERAR DOCUMENTOS",
+            command=self._iniciar_geracao,
+            bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 12, "bold"), padx=20, pady=10,
+        )
+        self.btn_gerar.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.btn_stop = tk.Button(
+            frame_botoes, text="⛔ INTERROMPER",
+            command=self._solicitar_stop,
+            bg=COR_BOTAO_STOP, fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 12, "bold"), padx=20, pady=10,
+            state="disabled",
+        )
+        self.btn_stop.pack(side="right", fill="x", expand=True, padx=(5, 0))
+
+        # Canvas scrollável para o restante da coluna direita
+        canvas_dir = tk.Canvas(col_dir, bg=COR_FUNDO, highlightthickness=0)
+        sb_dir = tk.Scrollbar(col_dir, orient="vertical", command=canvas_dir.yview)
+        canvas_dir.configure(yscrollcommand=sb_dir.set)
+        sb_dir.pack(side="right", fill="y")
+        canvas_dir.pack(side="left", fill="both", expand=True)
+        scroll_frame = tk.Frame(canvas_dir, bg=COR_FUNDO)
+        wid_dir = canvas_dir.create_window((0, 0), window=scroll_frame, anchor="nw")
+        def _on_cf(e):
+            canvas_dir.configure(scrollregion=canvas_dir.bbox("all"))
+            canvas_dir.itemconfig(wid_dir, width=canvas_dir.winfo_width())
+        scroll_frame.bind("<Configure>", _on_cf)
+        canvas_dir.bind("<MouseWheel>",
+            lambda e: canvas_dir.yview_scroll(int(-1*(e.delta/120)), "units"))
+        scroll_frame.bind("<MouseWheel>",
+            lambda e: canvas_dir.yview_scroll(int(-1*(e.delta/120)), "units"))
+        p = scroll_frame  # alias — todo widget da col_dir usa p
+
+        # ── 1. QUANTIDADE DE CASAS ──
+        self._secao_label(p, "QUANTIDADE DE CASAS")
+        self.var_qtd_casas = tk.IntVar(value=1)
+        tk.Spinbox(
+            p, from_=1, to=50, textvariable=self.var_qtd_casas,
+            width=5, bg=COR_CAMPO, fg=COR_TEXTO,
+            insertbackground=COR_TEXTO, relief="flat",
         ).pack(anchor="w", pady=3)
-        tk.Label(
-            col_dir, text="↳ Template Word selecionado automaticamente",
-            bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8),
-        ).pack(anchor="w", padx=20)
 
-        # Modo dos checkboxes (NOVO v4 — híbrido)
-
+        # ── 2. LOTE DE ESQUINA ──
+        self._secao_label(p, "LOTE")
         self.var_esquina = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            col_dir, text="Lote de esquina (ruas diferentes por casa)",
+            p, text="Lote de esquina (frente para mais de uma rua)",
             variable=self.var_esquina,
             bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
             activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
             command=self._toggle_ruas_esquina,
         ).pack(anchor="w", pady=3)
-        # Frame que aparece só quando esquina=True
-        self.frame_ruas_esquina = tk.Frame(col_dir, bg=COR_FUNDO)
+        # Frame de ruas — aparece logo abaixo ao marcar esquina
+        self.frame_ruas_esquina = tk.Frame(p, bg=COR_FUNDO)
         tk.Label(self.frame_ruas_esquina,
-                 text="Rua de cada casa (uma por linha):",
+                 text="Rua de cada casa (uma por linha, na ordem das casas):",
                  bg=COR_FUNDO, fg=COR_TEXTO_SEC,
                  font=("Segoe UI", 8)).pack(anchor="w")
         self.txt_ruas_esquina = tk.Text(
@@ -1435,40 +1468,37 @@ class App(tk.Tk):
             bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
             relief="flat", font=("Segoe UI", 9),
         )
-        self.txt_ruas_esquina.pack(fill="x", pady=(0,3))
-        tk.Label(self.frame_ruas_esquina,
-                 text="Ex:\nRUA DAS FLORES\nAV. BRASIL",
-                 bg=COR_FUNDO, fg=COR_TEXTO_SEC,
-                 font=("Segoe UI", 7)).pack(anchor="w")
+        self.txt_ruas_esquina.pack(fill="x", pady=(2, 3))
+        self.txt_ruas_esquina.bind("<MouseWheel>",
+            lambda e: canvas_dir.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        self._secao_label(col_dir, "CASAS GEMINADAS")
+        # ── 3. OPÇÕES ──
+        self._secao_label(p, "OPÇÕES")
+        self.var_esgoto = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            p, text="Sistema público de esgoto (SIM)",
+            variable=self.var_esgoto,
+            bg=COR_FUNDO, fg=COR_TEXTO, selectcolor=COR_CAMPO,
+            activebackground=COR_FUNDO, activeforeground=COR_TEXTO,
+        ).pack(anchor="w", pady=3)
+        tk.Label(
+            p, text="↳ Template Word selecionado automaticamente",
+            bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8),
+        ).pack(anchor="w", padx=20)
+
+        self._secao_label(p, "CASAS GEMINADAS")
         _og = ["Não se aplica", "Sim", "Não"]
-        # Loteamentos fixo = Não se aplica (não aparece na UI)
         self.var_gem_lot = tk.StringVar(value="Não se aplica")
-        tk.Label(col_dir, text="Condomínios",
+        tk.Label(p, text="Condomínios",
                  bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
         self.var_gem_cond = tk.StringVar(value="Não se aplica")
-        ttk.Combobox(col_dir, textvariable=self.var_gem_cond, values=_og,
-                     state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0,4))
+        ttk.Combobox(p, textvariable=self.var_gem_cond, values=_og,
+                     state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0, 8))
 
-        self._secao_label(col_dir, "QUANTIDADE DE CASAS")
-        self.var_qtd_casas = tk.IntVar(value=1)
-        tk.Spinbox(
-            col_dir, from_=1, to=50, textvariable=self.var_qtd_casas,
-            width=5, bg=COR_CAMPO, fg=COR_TEXTO,
-            insertbackground=COR_TEXTO, relief="flat",
-        ).pack(anchor="w", pady=3)
-
-        self._secao_label(col_dir, "RUAS POR CASA")
-        tk.Label(
-            col_dir,
-            text="(Obs: lote de esquina = ruas diferentes)",
-            bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8),
-        ).pack(anchor="w")
-
-        self._secao_label(col_dir, "LOG")
-        frame_log = tk.Frame(col_dir, bg=COR_LOG_FUNDO)
-        frame_log.pack(fill="both", expand=True, pady=3)
+        # ── LOG ──
+        self._secao_label(p, "LOG")
+        frame_log = tk.Frame(p, bg=COR_LOG_FUNDO)
+        frame_log.pack(fill="x", pady=3)
         sb_log = tk.Scrollbar(frame_log, orient="vertical")
         sb_log.pack(side="right", fill="y")
         self.txt_log = tk.Text(
@@ -1479,36 +1509,15 @@ class App(tk.Tk):
         self.txt_log.pack(side="left", fill="both", expand=True)
         sb_log.config(command=self.txt_log.yview)
 
-        self._secao_label(col_dir, "PROGRESSO")
-        self.progress = ttk.Progressbar(col_dir, mode="determinate", length=400)
+        # ── PROGRESSO ──
+        self._secao_label(p, "PROGRESSO")
+        self.progress = ttk.Progressbar(p, mode="determinate", length=400)
         self.progress.pack(fill="x", pady=3)
         self.var_status = tk.StringVar(value="Aguardando...")
         tk.Label(
-            col_dir, textvariable=self.var_status,
+            p, textvariable=self.var_status,
             bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 9),
-        ).pack(anchor="w")
-
-        # Frame de botões (NOVO v4 — com botão de interromper)
-        frame_botoes = tk.Frame(col_dir, bg=COR_FUNDO)
-        frame_botoes.pack(fill="x", pady=10)
-
-        self.btn_gerar = tk.Button(
-            frame_botoes, text="⚡ GERAR DOCUMENTOS",
-            command=self._iniciar_geracao,
-            bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
-            font=("Segoe UI", 12, "bold"), padx=20, pady=10,
-        )
-        self.btn_gerar.pack(side="left", fill="x", expand=True, padx=(0, 5))
-
-        # Botão INTERROMPER (NOVO v4)
-        self.btn_stop = tk.Button(
-            frame_botoes, text="⛔ INTERROMPER",
-            command=self._solicitar_stop,
-            bg=COR_BOTAO_STOP, fg=COR_TEXTO, relief="flat",
-            font=("Segoe UI", 12, "bold"), padx=20, pady=10,
-            state="disabled",
-        )
-        self.btn_stop.pack(side="right", fill="x", expand=True, padx=(5, 0))
+        ).pack(anchor="w", pady=(0, 10))
 
     # ------------------------------------------------------------------
     # Helpers de UI
