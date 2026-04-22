@@ -52,8 +52,17 @@ from copy import deepcopy
 
 import tkinter as tk
 
-# ── SCPO: imports movidos para dentro de _scpo_obter_chromedriver e _scpo_executar ──
-# (lazy load — carregados apenas ao clicar "Preencher SCPO", evita falha no .exe)
+# ── SCPO: imports Selenium (usados apenas ao clicar "Preencher SCPO") ────────
+import winreg as _winreg
+import json as _json_scpo
+import urllib.request as _urllib_scpo
+import zipfile as _zipfile_scpo
+from selenium import webdriver as _webdriver_scpo
+from selenium.webdriver.common.by import By as _By_scpo
+from selenium.webdriver.support.ui import WebDriverWait as _Wait_scpo
+from selenium.webdriver.support.ui import Select as _Select_scpo
+from selenium.webdriver.support import expected_conditions as _EC_scpo
+from selenium.webdriver.chrome.service import Service as _Service_scpo
 
 def buscar_cep(cep, callback_ok, callback_erro):
     """
@@ -1298,11 +1307,6 @@ def _extrair_campos_art(texto, log=None):
 
 def _scpo_obter_chromedriver(log_cb=print):
     """Detecta versão do Chrome e baixa ChromeDriver compatível."""
-    # Imports lazy — carregados só quando SCPO é executado (evita falha no .exe)
-    import winreg as _winreg
-    import json as _json_scpo
-    import urllib.request as _urllib_scpo
-    import zipfile as _zipfile_scpo
     versao_major = "124"
     try:
         for chave in [
@@ -1397,13 +1401,6 @@ def _scpo_executar(dados, step_cb, log_cb, done_cb,
                    evento_envio, fn_habilitar_envio):
     """Thread principal de automação SCPO."""
     import time, traceback
-    # Imports lazy do Selenium — carregados só neste momento
-    from selenium import webdriver as _webdriver_scpo
-    from selenium.webdriver.common.by import By as _By_scpo
-    from selenium.webdriver.support.ui import WebDriverWait as _Wait_scpo
-    from selenium.webdriver.support.ui import Select as _Select_scpo
-    from selenium.webdriver.support import expected_conditions as _EC_scpo
-    from selenium.webdriver.chrome.service import Service as _Service_scpo
 
     LOGIN_CPF     = "038.144.411-25"
     EMAIL_FIXO    = "joaovitorcabral94@gmail.com"
@@ -1741,29 +1738,9 @@ class App(tk.Tk):
         self.var_uf = tk.StringVar(value="GO")
         self._campo_simples(col_esq, self.var_uf, "UF")
 
-        # ── SCPO: campos adicionais ──────────────────────────────────────────
-        self._secao_label(col_esq, "SCPO")
+        # ── SCPO: campos movidos para coluna direita (scroll_frame) ──────────
         self.var_scpo_data_inicio = tk.StringVar()
-        self._campo_simples(col_esq, self.var_scpo_data_inicio,
-                            "Data de Início da Obra (DD/MM/AAAA)")
         self.var_scpo_senha = tk.StringVar()
-        tk.Label(col_esq, text="Senha SCPO",
-                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)
-                 ).pack(anchor="w")
-        frame_senha_scpo = tk.Frame(col_esq, bg=COR_FUNDO)
-        frame_senha_scpo.pack(fill="x", pady=(0, 4))
-        self._ent_scpo_senha = tk.Entry(
-            frame_senha_scpo, textvariable=self.var_scpo_senha,
-            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
-            relief="flat", font=("Segoe UI", 10), show="*"
-        )
-        self._ent_scpo_senha.pack(side="left", fill="x", expand=True)
-        tk.Button(
-            frame_senha_scpo, text="👁",
-            bg=COR_CAMPO, fg=COR_TEXTO, relief="flat",
-            command=lambda: self._ent_scpo_senha.config(
-                show="" if self._ent_scpo_senha.cget("show") == "*" else "*")
-        ).pack(side="left", padx=(4, 0))
 
         # --- Coluna direita com Canvas+Scroll para todo o conteúdo ---
         # Botões fixos no rodapé (fora do scroll)
@@ -1910,6 +1887,28 @@ class App(tk.Tk):
             p, textvariable=self.var_status,
             bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(0, 10))
+
+        # ── SCPO ──
+        self._secao_label(p, "SCPO")
+        self._campo_simples(p, self.var_scpo_data_inicio,
+                            "Data de Início da Obra (DD/MM/AAAA)")
+        tk.Label(p, text="Senha SCPO",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)
+                 ).pack(anchor="w")
+        frame_senha_scpo = tk.Frame(p, bg=COR_FUNDO)
+        frame_senha_scpo.pack(fill="x", pady=(0, 4))
+        self._ent_scpo_senha = tk.Entry(
+            frame_senha_scpo, textvariable=self.var_scpo_senha,
+            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+            relief="flat", font=("Segoe UI", 10), show="*"
+        )
+        self._ent_scpo_senha.pack(side="left", fill="x", expand=True)
+        tk.Button(
+            frame_senha_scpo, text="👁",
+            bg=COR_CAMPO, fg=COR_TEXTO, relief="flat",
+            command=lambda: self._ent_scpo_senha.config(
+                show="" if self._ent_scpo_senha.cget("show") == "*" else "*")
+        ).pack(side="left", padx=(4, 0))
 
     # ------------------------------------------------------------------
     # Helpers de UI
