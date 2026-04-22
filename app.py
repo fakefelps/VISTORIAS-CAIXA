@@ -52,6 +52,18 @@ from copy import deepcopy
 
 import tkinter as tk
 
+# ── SCPO: imports Selenium (usados apenas ao clicar "Preencher SCPO") ────────
+import winreg as _winreg
+import json as _json_scpo
+import urllib.request as _urllib_scpo
+import zipfile as _zipfile_scpo
+from selenium import webdriver as _webdriver_scpo
+from selenium.webdriver.common.by import By as _By_scpo
+from selenium.webdriver.support.ui import WebDriverWait as _Wait_scpo
+from selenium.webdriver.support.ui import Select as _Select_scpo
+from selenium.webdriver.support import expected_conditions as _EC_scpo
+from selenium.webdriver.chrome.service import Service as _Service_scpo
+
 def buscar_cep(cep, callback_ok, callback_erro):
     """
     Consulta ViaCEP em thread separada e chama callback com o resultado.
@@ -1288,6 +1300,310 @@ def _extrair_campos_art(texto, log=None):
     return campos
 
 
+
+# ============================================================
+# SCPO — FUNÇÕES DE AUTOMAÇÃO
+# ============================================================
+
+def _scpo_obter_chromedriver(log_cb=print):
+    """Detecta versão do Chrome e baixa ChromeDriver compatível."""
+    versao_major = "124"
+    try:
+        for chave in [
+            r"SOFTWARE\Google\Chrome\BLBeacon",
+            r"SOFTWARE\Wow6432Node\Google\Chrome\BLBeacon",
+        ]:
+            try:
+                with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, chave) as k:
+                    v, _ = _winreg.QueryValueEx(k, "version")
+                    versao_major = v.split(".")[0]
+                    log_cb(f"  Chrome detectado: v{v}")
+                    break
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    driver_dir  = Path.home() / "AppData" / "Local" / "SCPODriver"
+    driver_path = driver_dir / "chromedriver.exe"
+    versao_file = driver_dir / "versao.txt"
+    driver_dir.mkdir(parents=True, exist_ok=True)
+
+    if driver_path.exists() and versao_file.exists():
+        cached = versao_file.read_text().strip()
+        if cached.startswith(versao_major + "."):
+            log_cb(f"  ChromeDriver {cached} em cache.")
+            return str(driver_path)
+
+    log_cb(f"  Baixando ChromeDriver para Chrome {versao_major}...")
+    api = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+    with _urllib_scpo.urlopen(api, timeout=15) as r:
+        dados = _json_scpo.loads(r.read())
+
+    url_zip = versao_exata = None
+    for v in reversed(dados["versions"]):
+        if v["version"].startswith(versao_major + "."):
+            for d in v.get("downloads", {}).get("chromedriver", []):
+                if d["platform"] == "win64":
+                    url_zip = d["url"]
+                    versao_exata = v["version"]
+                    break
+            if url_zip:
+                break
+
+    if not url_zip:
+        raise Exception(f"ChromeDriver para Chrome {versao_major} não encontrado.")
+
+    zip_path = driver_dir / "chromedriver.zip"
+    _urllib_scpo.urlretrieve(url_zip, zip_path)
+    with _zipfile_scpo.ZipFile(zip_path, "r") as z:
+        for nome in z.namelist():
+            if nome.endswith("chromedriver.exe"):
+                with z.open(nome) as s, open(driver_path, "wb") as d:
+                    d.write(s.read())
+                break
+    zip_path.unlink()
+    versao_file.write_text(versao_exata)
+    log_cb(f"  ChromeDriver {versao_exata} instalado.")
+    return str(driver_path)
+
+
+def _scpo_montar_nome_obra(logradouro, quadra, lote):
+    return f"RESIDENCIAL {logradouro.upper()} QUADRA {quadra} LOTE {lote}"
+
+
+def _scpo_montar_observacao(logradouro, quadra, lote, n_casas,
+                             esquina, rua2, ruas_casas):
+    casas = []
+    for i in range(1, n_casas + 1):
+        label = f"CASA {i}"
+        if esquina and ruas_casas and i <= len(ruas_casas) and ruas_casas[i-1]:
+            label += f" SITUADA NA {ruas_casas[i-1].upper()}"
+        casas.append(label)
+    casas_str = ", ".join(casas)
+    if not esquina:
+        return (f"OBRA RESIDENCIAL UNIFAMILIAR SITUADA NA {logradouro.upper()}, "
+                f"QUADRA {quadra} LOTE {lote} COMPOSTA POR: {casas_str}")
+    return (f"OBRA RESIDENCIAL UNIFAMILIAR SITUADA NA {logradouro.upper()} "
+            f"E {rua2.upper()}, QUADRA {quadra} LOTE {lote} "
+            f"COMPOSTA POR: {casas_str}")
+
+
+def _scpo_data_termino(data_inicio_str):
+    """Retorna data de término = 1 mês após data_inicio_str (DD/MM/AAAA)."""
+    from dateutil.relativedelta import relativedelta
+    dt = datetime.datetime.strptime(data_inicio_str, "%d/%m/%Y")
+    return (dt + relativedelta(months=1)).strftime("%d/%m/%Y")
+
+
+def _scpo_executar(dados, step_cb, log_cb, done_cb,
+                   evento_captcha, fn_habilitar_captcha,
+                   evento_envio, fn_habilitar_envio):
+    """Thread principal de automação SCPO."""
+    import time, traceback
+
+    LOGIN_CPF     = "038.144.411-25"
+    EMAIL_FIXO    = "joaovitorcabral94@gmail.com"
+    TELEFONE_FIXO = "(62)99266-5923"
+    EMP_PRINCIPAL = "0"
+    EMP_TERCEIROS = "5"
+    URL_LOGIN     = "https://scpo.mte.gov.br/"
+
+    driver = None
+    try:
+        step_cb(5, "Obtendo ChromeDriver...")
+        driver_path = _scpo_obter_chromedriver(log_cb)
+
+        options = _webdriver_scpo.ChromeOptions()
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-notifications")
+        driver = _webdriver_scpo.Chrome(
+            service=_Service_scpo(driver_path), options=options)
+        wait = _Wait_scpo(driver, 30)
+
+        # LOGIN
+        step_cb(10, "Abrindo SCPO...")
+        log_cb("Abrindo SCPO...")
+        driver.get(URL_LOGIN)
+        wait.until(_EC_scpo.presence_of_element_located((_By_scpo.ID, "txtCPF")))
+        driver.find_element(_By_scpo.ID, "txtCPF").send_keys(LOGIN_CPF)
+        driver.find_element(_By_scpo.ID, "PlaceHolderConteudo_txtSenha").send_keys(dados["senha"])
+        log_cb("CPF e senha preenchidos. Digite o captcha no navegador.")
+        step_cb(15, "Aguardando captcha...")
+        fn_habilitar_captcha()
+        evento_captcha.wait()
+        log_cb("Captcha confirmado. Entrando...")
+        step_cb(20, "Efetuando login...")
+        driver.find_element(_By_scpo.ID, "PlaceHolderConteudo_btnLogin").click()
+        wait.until(_EC_scpo.presence_of_element_located(
+            (_By_scpo.XPATH, "//a[contains(@onclick,'subMenu01')]")))
+        log_cb("✓ Login OK!")
+
+        # NAVEGAÇÃO
+        step_cb(30, "Navegando para Comunicar Obra...")
+        wait.until(_EC_scpo.element_to_be_clickable(
+            (_By_scpo.XPATH, "//a[contains(@onclick,'subMenu01')]"))).click()
+        time.sleep(1)
+        wait.until(_EC_scpo.element_to_be_clickable(
+            (_By_scpo.XPATH, "//a[contains(@href,'DeclaracaoPreviaObra/Comunicar')]"))).click()
+
+        # TELA INTERMEDIÁRIA
+        step_cb(38, "Identificando empresa...")
+        chk = wait.until(_EC_scpo.presence_of_element_located(
+            (_By_scpo.ID, "PlaceHolderConteudo_chkObraSemCNPJ")))
+        if not chk.is_selected():
+            chk.click()
+        time.sleep(1)
+        cpf_f = wait.until(_EC_scpo.element_to_be_clickable(
+            (_By_scpo.ID, "txtCPFProprietarioObra")))
+        cpf_f.clear()
+        cpf_f.send_keys(LOGIN_CPF)
+        driver.find_element(
+            _By_scpo.ID, "PlaceHolderConteudo_btnDeclararObra").click()
+
+        # FORMULÁRIO
+        step_cb(50, "Preenchendo formulário...")
+        log_cb("Preenchendo formulário...")
+        wait.until(_EC_scpo.presence_of_element_located(
+            (_By_scpo.ID, "txtNomeObraEmpreendimento"))).send_keys(dados["nome_obra"])
+        log_cb(f"  Nome: {dados['nome_obra']}")
+        driver.find_element(_By_scpo.ID, "txtEmailObra").send_keys(EMAIL_FIXO)
+        driver.find_element(_By_scpo.ID, "txtTelefoneObra").send_keys(TELEFONE_FIXO)
+
+        # CEP dígito por dígito
+        cep_limpo = re.sub(r"[^0-9]", "", dados["cep"])
+        campo_cep = driver.find_element(_By_scpo.ID, "txtObraCEP")
+        driver.execute_script("arguments[0].value = '';", campo_cep)
+        driver.execute_script("arguments[0].focus();", campo_cep)
+        for digito in cep_limpo:
+            campo_cep.send_keys(digito)
+            time.sleep(0.05)
+        time.sleep(1)
+        driver.find_element(
+            _By_scpo.ID, "PlaceHolderConteudo_imgPesquisarCEPObra").click()
+        time.sleep(4)
+        log_cb(f"  CEP: {cep_limpo}")
+
+        # Número: SN
+        try:
+            n = driver.find_element(_By_scpo.ID, "txtObraNumero")
+            n.clear(); n.send_keys("SN")
+        except Exception: pass
+
+        # Complemento
+        try:
+            c = driver.find_element(_By_scpo.XPATH,
+                "//input[contains(@id,'Complemento') or contains(@id,'complemento')]")
+            c.clear()
+            c.send_keys(f"QUADRA {dados['quadra']} LOTE {dados['lote']}")
+        except Exception: pass
+
+        # Observação
+        try:
+            obs = driver.find_element(_By_scpo.XPATH,
+                "//textarea[contains(@id,'Observ') or contains(@id,'observ') "
+                "or contains(@id,'Descri')]")
+            obs.clear()
+            obs.send_keys(dados["observacao"])
+            log_cb(f"  Obs: {dados['observacao'][:80]}...")
+        except Exception as e:
+            log_cb(f"  textarea não localizada: {e}")
+
+        # Classe CNAE 4120-4
+        step_cb(65, "Selecionando CNAE e tipo...")
+        try:
+            sel = _Select_scpo(driver.find_element(
+                _By_scpo.ID, "PlaceHolderConteudo_cboClasseCNAE"))
+            for opt in sel.options:
+                if "4120" in opt.text:
+                    sel.select_by_visible_text(opt.text); break
+            time.sleep(1)
+        except Exception as e: log_cb(f"  CNAE: {e}")
+
+        # Subclasse 00
+        try:
+            sel_sub = _Select_scpo(wait.until(_EC_scpo.presence_of_element_located(
+                (_By_scpo.ID, "PlaceHolderConteudo_cboSubclasse"))))
+            for opt in sel_sub.options:
+                if opt.text.strip().startswith("00"):
+                    sel_sub.select_by_visible_text(opt.text); break
+        except Exception as e: log_cb(f"  Subclasse: {e}")
+
+        # Tipo Construção — Edifício
+        try:
+            sel_tipo = _Select_scpo(driver.find_element(
+                _By_scpo.ID, "PlaceHolderConteudo_CboTipoConstrucao"))
+            for opt in sel_tipo.options:
+                if "dif" in opt.text.lower():
+                    sel_tipo.select_by_visible_text(opt.text); break
+        except Exception as e: log_cb(f"  Tipo Construção: {e}")
+
+        # Tipo Obra — Privada
+        try:
+            driver.find_element(_By_scpo.XPATH,
+                "//input[@type='radio' and contains(@id,'rivada')]").click()
+        except Exception as e: log_cb(f"  Privada: {e}")
+
+        # Característica — Construção
+        try:
+            driver.find_element(_By_scpo.XPATH,
+                "//input[@type='radio' and "
+                "(@value='Construcao' or @value='Construção' "
+                "or contains(@id,'onstrucao'))]").click()
+        except Exception as e: log_cb(f"  Construção: {e}")
+
+        # FGTS — Não
+        try:
+            driver.find_element(
+                _By_scpo.ID, "PlaceHolderConteudo_rdbFinanciamentoFGTSNao").click()
+        except Exception as e: log_cb(f"  FGTS: {e}")
+
+        # Datas
+        try:
+            driver.find_element(_By_scpo.ID, "txtInicio").send_keys(dados["data_inicio"])
+            driver.find_element(_By_scpo.ID, "txtTermino").send_keys(
+                _scpo_data_termino(dados["data_inicio"]))
+            log_cb(f"  Datas: {dados['data_inicio']} → {_scpo_data_termino(dados['data_inicio'])}")
+        except Exception as e: log_cb(f"  Datas: {e}")
+
+        # Empregados
+        try:
+            driver.find_element(
+                _By_scpo.ID, "txtNumeroEmpregadosEmpresaPrincipal").send_keys(EMP_PRINCIPAL)
+        except Exception as e: log_cb(f"  Emp. principal: {e}")
+        try:
+            driver.find_element(_By_scpo.XPATH,
+                "//input[contains(@id,'Terceiros') or contains(@id,'terceiros')]"
+            ).send_keys(EMP_TERCEIROS)
+        except Exception as e: log_cb(f"  Emp. terceiros: {e}")
+
+        step_cb(85, "Aguardando confirmação...")
+        log_cb("✓ Formulário preenchido! Verifique o navegador.")
+        log_cb("Clique 'Confirmar envio SCPO' quando estiver pronto.")
+        fn_habilitar_envio()
+        evento_envio.wait()
+
+        # SUBMETER
+        step_cb(92, "Submetendo...")
+        log_cb("Submetendo formulário...")
+        try:
+            driver.find_element(
+                _By_scpo.ID, "PlaceHolderConteudo_btnConfirmar").click()
+            time.sleep(3)
+            log_cb("✓ Formulário submetido!")
+        except Exception as e:
+            log_cb(f"  Erro ao submeter: {e}")
+
+        step_cb(100, "SCPO concluído!")
+        done_cb(True, "SCPO preenchido com sucesso!")
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_cb(f"✗ ERRO SCPO: {e}")
+        log_cb(tb)
+        done_cb(False, str(e))
+
+
 # ============================================================
 # INTERFACE TKINTER
 # ============================================================
@@ -1422,6 +1738,30 @@ class App(tk.Tk):
         self.var_uf = tk.StringVar(value="GO")
         self._campo_simples(col_esq, self.var_uf, "UF")
 
+        # ── SCPO: campos adicionais ──────────────────────────────────────────
+        self._secao_label(col_esq, "SCPO")
+        self.var_scpo_data_inicio = tk.StringVar()
+        self._campo_simples(col_esq, self.var_scpo_data_inicio,
+                            "Data de Início da Obra (DD/MM/AAAA)")
+        self.var_scpo_senha = tk.StringVar()
+        tk.Label(col_esq, text="Senha SCPO",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)
+                 ).pack(anchor="w")
+        frame_senha_scpo = tk.Frame(col_esq, bg=COR_FUNDO)
+        frame_senha_scpo.pack(fill="x", pady=(0, 4))
+        self._ent_scpo_senha = tk.Entry(
+            frame_senha_scpo, textvariable=self.var_scpo_senha,
+            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+            relief="flat", font=("Segoe UI", 10), show="*"
+        )
+        self._ent_scpo_senha.pack(side="left", fill="x", expand=True)
+        tk.Button(
+            frame_senha_scpo, text="👁",
+            bg=COR_CAMPO, fg=COR_TEXTO, relief="flat",
+            command=lambda: self._ent_scpo_senha.config(
+                show="" if self._ent_scpo_senha.cget("show") == "*" else "*")
+        ).pack(side="left", padx=(4, 0))
+
         # --- Coluna direita com Canvas+Scroll para todo o conteúdo ---
         # Botões fixos no rodapé (fora do scroll)
         frame_botoes = tk.Frame(col_dir, bg=COR_FUNDO)
@@ -1441,6 +1781,33 @@ class App(tk.Tk):
             state="disabled",
         )
         self.btn_stop.pack(side="right", fill="x", expand=True, padx=(5, 0))
+
+        # Botão SCPO — linha separada abaixo
+        frame_botoes2 = tk.Frame(col_dir, bg=COR_FUNDO)
+        frame_botoes2.pack(side="bottom", fill="x", pady=(4, 0))
+        self.btn_scpo = tk.Button(
+            frame_botoes2, text="🌐 PREENCHER SCPO",
+            command=self._iniciar_scpo,
+            bg="#1a6b3c", fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 11, "bold"), padx=20, pady=8,
+        )
+        self.btn_scpo.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.btn_scpo_captcha = tk.Button(
+            frame_botoes2, text="✔ Código digitado",
+            command=self._scpo_liberar_captcha,
+            bg="#27ae60", fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=8,
+            state="disabled",
+        )
+        self.btn_scpo_captcha.pack(side="left", padx=(0, 5))
+        self.btn_scpo_envio = tk.Button(
+            frame_botoes2, text="✔ Confirmar envio SCPO",
+            command=self._scpo_liberar_envio,
+            bg="#e67e22", fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 10), padx=10, pady=8,
+            state="disabled",
+        )
+        self.btn_scpo_envio.pack(side="left")
 
         # Canvas scrollável para o restante da coluna direita
         canvas_dir = tk.Canvas(col_dir, bg=COR_FUNDO, highlightthickness=0)
@@ -1747,6 +2114,118 @@ class App(tk.Tk):
             val = self._entries_ruas[idx].get().strip()
             return val if val else self.var_logradouro.get()
         return self.var_logradouro.get()
+
+    # ── Métodos SCPO ─────────────────────────────────────────────────────────
+    def _scpo_liberar_captcha(self):
+        self._scpo_evento_captcha.set()
+        self.after(0, lambda: self.btn_scpo_captcha.config(state="disabled"))
+        self.log("  ✓ Captcha SCPO confirmado.")
+
+    def _scpo_liberar_envio(self):
+        self._scpo_evento_envio.set()
+        self.after(0, lambda: self.btn_scpo_envio.config(state="disabled"))
+        self.log("  ✓ Envio SCPO confirmado.")
+
+    def _iniciar_scpo(self):
+        """Valida campos e dispara automação SCPO em thread separada."""
+        # Validações
+        if not self.var_cep.get().strip():
+            messagebox.showwarning("SCPO", "Preencha o CEP antes de iniciar o SCPO.")
+            return
+        if not self.var_logradouro.get().strip():
+            messagebox.showwarning("SCPO", "Preencha o Logradouro antes de iniciar o SCPO.")
+            return
+        ql = self.var_quadra_lote.get().strip()
+        if not ql:
+            messagebox.showwarning("SCPO", "Preencha Quadra e Lote antes de iniciar o SCPO.")
+            return
+        if not self.var_scpo_data_inicio.get().strip():
+            messagebox.showwarning("SCPO", "Preencha a Data de Início da Obra (DD/MM/AAAA).")
+            return
+        if not self.var_scpo_senha.get().strip():
+            messagebox.showwarning("SCPO", "Preencha a Senha SCPO.")
+            return
+        try:
+            datetime.datetime.strptime(self.var_scpo_data_inicio.get().strip(), "%d/%m/%Y")
+        except ValueError:
+            messagebox.showwarning("SCPO", "Data de Início inválida. Use DD/MM/AAAA.")
+            return
+
+        # Separar quadra e lote de "QUADRA X LOTE Y"
+        import re as _re
+        ql_upper = ql.upper()
+        m_q = _re.search(r"QUADRA\s+(\S+)", ql_upper)
+        m_l = _re.search(r"LOTE\s+(\S+)", ql_upper)
+        quadra = m_q.group(1) if m_q else ql
+        lote   = m_l.group(1) if m_l else ""
+
+        # Ruas por casa (esquina)
+        n_casas   = self.var_qtd_casas.get()
+        ruas_casas = []
+        if self.var_esquina.get():
+            for i in range(1, n_casas + 1):
+                ruas_casas.append(self._get_rua_casa(i))
+        rua2 = ruas_casas[1] if len(ruas_casas) >= 2 else ""
+
+        dados_scpo = {
+            "senha":       self.var_scpo_senha.get().strip(),
+            "cep":         self.var_cep.get().strip(),
+            "logradouro":  self.var_logradouro.get().strip(),
+            "quadra":      quadra,
+            "lote":        lote,
+            "n_casas":     n_casas,
+            "esquina":     self.var_esquina.get(),
+            "rua2":        rua2,
+            "ruas_casas":  ruas_casas,
+            "data_inicio": self.var_scpo_data_inicio.get().strip(),
+            "nome_obra":   _scpo_montar_nome_obra(
+                               self.var_logradouro.get().strip(), quadra, lote),
+            "observacao":  _scpo_montar_observacao(
+                               self.var_logradouro.get().strip(), quadra, lote,
+                               n_casas, self.var_esquina.get(),
+                               rua2, ruas_casas),
+        }
+
+        # Resetar eventos
+        self._scpo_evento_captcha = threading.Event()
+        self._scpo_evento_envio   = threading.Event()
+
+        # Desabilitar botão, limpar log, resetar progresso
+        self.btn_scpo.config(state="disabled")
+        self.btn_scpo_captcha.config(state="disabled")
+        self.btn_scpo_envio.config(state="disabled")
+        self.progress["value"] = 0
+        self.var_status.set("SCPO: iniciando...")
+        self.log("\n═══ INICIANDO SCPO ═══")
+
+        def step_cb(pct, desc):
+            self.after(0, lambda: (
+                self.progress.config(value=pct),
+                self.var_status.set(f"SCPO: {desc}")
+            ))
+
+        def done_cb(ok, msg):
+            self.after(0, self._scpo_finalizar, ok, msg)
+
+        threading.Thread(
+            target=_scpo_executar,
+            args=(dados_scpo, step_cb, self.log,
+                  done_cb,
+                  self._scpo_evento_captcha,
+                  lambda: self.after(0, lambda: self.btn_scpo_captcha.config(state="normal")),
+                  self._scpo_evento_envio,
+                  lambda: self.after(0, lambda: self.btn_scpo_envio.config(state="normal"))),
+            daemon=True
+        ).start()
+
+    def _scpo_finalizar(self, ok, msg):
+        self.btn_scpo.config(state="normal")
+        self.btn_scpo_captcha.config(state="disabled")
+        self.btn_scpo_envio.config(state="disabled")
+        if ok:
+            messagebox.showinfo("SCPO", msg)
+        else:
+            messagebox.showerror("SCPO — Erro", msg)
 
     def _check_stop(self):
         """Levanta exceção se o usuário solicitou parada."""
