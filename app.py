@@ -70,7 +70,10 @@ def buscar_cep(cep, callback_ok, callback_erro):
     callback_ok(data): dict com logradouro, bairro, localidade, uf
     callback_erro(msg): string com mensagem de erro
     """
-    import urllib.request, json, threading
+    import urllib.request, json, threading, ssl
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
     cep_limpo = re.sub(r"[^0-9]", "", cep)
     if len(cep_limpo) != 8:
         callback_erro("CEP deve ter 8 dígitos")
@@ -78,7 +81,7 @@ def buscar_cep(cep, callback_ok, callback_erro):
     def _worker():
         try:
             url = f"https://viacep.com.br/ws/{cep_limpo}/json/"
-            with urllib.request.urlopen(url, timeout=5) as r:
+            with urllib.request.urlopen(url, timeout=5, context=_ssl_ctx) as r:
                 data = json.loads(r.read().decode())
             if data.get("erro"):
                 callback_erro("CEP não encontrado")
@@ -1073,8 +1076,12 @@ def _word_para_pdf(docx_path, pdf_path, log=None):
         try: word.DisplayAlerts = False
         except Exception: pass
         doc = word.Documents.Open(os.path.abspath(docx_path))
-        # 17 = wdFormatPDF
-        doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
+        # 17 = wdFormatPDF — SaveAs2 é o método correto em Word 2013+
+        # Fallback para SaveAs em versões mais antigas
+        try:
+            doc.SaveAs2(os.path.abspath(pdf_path), FileFormat=17)
+        except AttributeError:
+            doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
         if log:
             log(f"  ✓ PDF gerado: {os.path.basename(pdf_path)}")
     finally:
@@ -1365,8 +1372,12 @@ def _scpo_obter_chromedriver(log_cb=print):
             return str(driver_path)
 
     log_cb(f"  Baixando ChromeDriver para Chrome {versao_major}...")
+    import ssl as _ssl
+    _ctx = _ssl.create_default_context()
+    _ctx.check_hostname = False
+    _ctx.verify_mode = _ssl.CERT_NONE
     api = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
-    with _urllib_scpo.urlopen(api, timeout=15) as r:
+    with _urllib_scpo.urlopen(api, timeout=15, context=_ctx) as r:
         dados = _json_scpo.loads(r.read())
 
     url_zip = versao_exata = None
@@ -1384,7 +1395,9 @@ def _scpo_obter_chromedriver(log_cb=print):
         raise Exception(f"ChromeDriver para Chrome {versao_major} não encontrado.")
 
     zip_path = driver_dir / "chromedriver.zip"
-    _urllib_scpo.urlretrieve(url_zip, zip_path)
+    opener = _urllib_scpo.build_opener(_urllib_scpo.HTTPSHandler(context=_ctx))
+    with opener.open(url_zip) as resp, open(zip_path, "wb") as f:
+        f.write(resp.read())
     with _zipfile_scpo.ZipFile(zip_path, "r") as z:
         for nome in z.namelist():
             if nome.endswith("chromedriver.exe"):
@@ -1773,7 +1786,9 @@ class App(tk.Tk):
         self._campo_simples(col_esq, self.var_uf, "UF")
 
         # ── SCPO: campos movidos para coluna direita (scroll_frame) ──────────
-        self.var_scpo_data_inicio = tk.StringVar()
+        self.var_scpo_data_inicio = tk.StringVar(
+            value=datetime.date.today().strftime("%d/%m/%Y")
+        )
         self.var_scpo_senha = tk.StringVar()
 
         # --- Coluna direita com Canvas+Scroll para todo o conteúdo ---
