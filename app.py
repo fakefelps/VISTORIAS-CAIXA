@@ -1336,7 +1336,7 @@ def _extrair_campos_art(texto, log=None):
 
 def _scpo_obter_chromedriver(log_cb=print):
     """Detecta versão do Chrome e baixa ChromeDriver compatível."""
-    versao_major = "124"
+    versao_major = "147"  # fallback — atualizar se o Chrome avançar muito
     try:
         for chave in [
             r"SOFTWARE\Google\Chrome\BLBeacon",
