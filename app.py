@@ -52,17 +52,8 @@ from copy import deepcopy
 
 import tkinter as tk
 
-# ── SCPO: imports Selenium (usados apenas ao clicar "Preencher SCPO") ────────
-import winreg as _winreg
-import json as _json_scpo
-import urllib.request as _urllib_scpo
-import zipfile as _zipfile_scpo
-from selenium import webdriver as _webdriver_scpo
-from selenium.webdriver.common.by import By as _By_scpo
-from selenium.webdriver.support.ui import WebDriverWait as _Wait_scpo
-from selenium.webdriver.support.ui import Select as _Select_scpo
-from selenium.webdriver.support import expected_conditions as _EC_scpo
-from selenium.webdriver.chrome.service import Service as _Service_scpo
+# ── SCPO: imports movidos para dentro de _scpo_obter_chromedriver e _scpo_executar ──
+# (lazy load — carregados apenas ao clicar "Preencher SCPO", evita falha no .exe)
 
 def buscar_cep(cep, callback_ok, callback_erro):
     """
@@ -1307,6 +1298,11 @@ def _extrair_campos_art(texto, log=None):
 
 def _scpo_obter_chromedriver(log_cb=print):
     """Detecta versão do Chrome e baixa ChromeDriver compatível."""
+    # Imports lazy — carregados só quando SCPO é executado (evita falha no .exe)
+    import winreg as _winreg
+    import json as _json_scpo
+    import urllib.request as _urllib_scpo
+    import zipfile as _zipfile_scpo
     versao_major = "124"
     try:
         for chave in [
@@ -1401,6 +1397,13 @@ def _scpo_executar(dados, step_cb, log_cb, done_cb,
                    evento_envio, fn_habilitar_envio):
     """Thread principal de automação SCPO."""
     import time, traceback
+    # Imports lazy do Selenium — carregados só neste momento
+    from selenium import webdriver as _webdriver_scpo
+    from selenium.webdriver.common.by import By as _By_scpo
+    from selenium.webdriver.support.ui import WebDriverWait as _Wait_scpo
+    from selenium.webdriver.support.ui import Select as _Select_scpo
+    from selenium.webdriver.support import expected_conditions as _EC_scpo
+    from selenium.webdriver.chrome.service import Service as _Service_scpo
 
     LOGIN_CPF     = "038.144.411-25"
     EMAIL_FIXO    = "joaovitorcabral94@gmail.com"
