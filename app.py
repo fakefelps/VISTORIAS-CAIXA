@@ -225,6 +225,35 @@ COR_LOG_TEXTO = "#7ec8a0"
 
 
 # ============================================================
+# PERSISTÊNCIA — arquivo de configuração do usuário
+# ============================================================
+ARQUIVO_CONFIG = Path.home() / ".bercan_config.json"
+
+def _config_carregar() -> dict:
+    """Lê o arquivo de config; retorna dict vazio se não existir ou estiver corrompido."""
+    try:
+        if ARQUIVO_CONFIG.exists():
+            import json
+            return json.loads(ARQUIVO_CONFIG.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def _config_salvar(dados: dict):
+    """Salva o dict de configuração em disco (merge com o que já existe)."""
+    try:
+        import json
+        atual = _config_carregar()
+        atual.update(dados)
+        ARQUIVO_CONFIG.write_text(
+            json.dumps(atual, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+# ============================================================
 # HELPERS — CAMINHOS
 # ============================================================
 
@@ -1621,6 +1650,11 @@ class App(tk.Tk):
 
         self._criar_widgets()
 
+        # Restaurar configurações salvas
+        cfg = _config_carregar()
+        if cfg.get("scpo_senha"):
+            self.var_scpo_senha.set(cfg["scpo_senha"])
+
     # ------------------------------------------------------------------
     # Construção da UI
     # ------------------------------------------------------------------
@@ -1864,6 +1898,33 @@ class App(tk.Tk):
         ttk.Combobox(p, textvariable=self.var_gem_cond, values=_og,
                      state="readonly", font=("Segoe UI", 9)).pack(fill="x", pady=(0, 8))
 
+        # ── SCPO ──
+        self._secao_label(p, "SCPO")
+        self._campo_simples(p, self.var_scpo_data_inicio,
+                            "Data de Início da Obra (DD/MM/AAAA)")
+        tk.Label(p, text="Senha SCPO",
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)
+                 ).pack(anchor="w")
+        frame_senha_scpo = tk.Frame(p, bg=COR_FUNDO)
+        frame_senha_scpo.pack(fill="x", pady=(0, 4))
+        self._ent_scpo_senha = tk.Entry(
+            frame_senha_scpo, textvariable=self.var_scpo_senha,
+            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
+            relief="flat", font=("Segoe UI", 10), show="*"
+        )
+        self._ent_scpo_senha.pack(side="left", fill="x", expand=True)
+        tk.Button(
+            frame_senha_scpo, text="👁",
+            bg=COR_CAMPO, fg=COR_TEXTO, relief="flat",
+            command=lambda: self._ent_scpo_senha.config(
+                show="" if self._ent_scpo_senha.cget("show") == "*" else "*")
+        ).pack(side="left", padx=(4, 0))
+        # Salvar senha automaticamente sempre que for alterada
+        self.var_scpo_senha.trace_add(
+            "write",
+            lambda *_: _config_salvar({"scpo_senha": self.var_scpo_senha.get()})
+        )
+
         # ── LOG ──
         self._secao_label(p, "LOG")
         frame_log = tk.Frame(p, bg=COR_LOG_FUNDO)
@@ -1887,28 +1948,6 @@ class App(tk.Tk):
             p, textvariable=self.var_status,
             bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(0, 10))
-
-        # ── SCPO ──
-        self._secao_label(p, "SCPO")
-        self._campo_simples(p, self.var_scpo_data_inicio,
-                            "Data de Início da Obra (DD/MM/AAAA)")
-        tk.Label(p, text="Senha SCPO",
-                 bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)
-                 ).pack(anchor="w")
-        frame_senha_scpo = tk.Frame(p, bg=COR_FUNDO)
-        frame_senha_scpo.pack(fill="x", pady=(0, 4))
-        self._ent_scpo_senha = tk.Entry(
-            frame_senha_scpo, textvariable=self.var_scpo_senha,
-            bg=COR_CAMPO, fg=COR_TEXTO, insertbackground=COR_TEXTO,
-            relief="flat", font=("Segoe UI", 10), show="*"
-        )
-        self._ent_scpo_senha.pack(side="left", fill="x", expand=True)
-        tk.Button(
-            frame_senha_scpo, text="👁",
-            bg=COR_CAMPO, fg=COR_TEXTO, relief="flat",
-            command=lambda: self._ent_scpo_senha.config(
-                show="" if self._ent_scpo_senha.cget("show") == "*" else "*")
-        ).pack(side="left", padx=(4, 0))
 
     # ------------------------------------------------------------------
     # Helpers de UI
