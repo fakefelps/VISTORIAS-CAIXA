@@ -21,40 +21,7 @@ jobs:
         shell: cmd
         run: |
           python -m pip install --upgrade pip
-          pip install python-docx==1.1.0 openpyxl==3.1.2 pywin32==306 pillow==10.2.0 lxml==5.1.0 pytesseract==0.3.10 pymupdf==1.23.26 pyinstaller==6.3.0
-
-      # ========================================================
-      # INSTALAR TESSERACT (simplificado e robusto)
-      # ========================================================
-      - name: Instalar Tesseract via Chocolatey
-        shell: cmd
-        run: choco install tesseract --yes --no-progress
-
-      - name: Criar pastas para empacotar Tesseract
-        shell: cmd
-        run: |
-          mkdir assets\tesseract 2>nul
-          mkdir assets\tesseract\tessdata 2>nul
-
-      - name: Copiar Tesseract para assets
-        shell: cmd
-        run: |
-          copy "C:\Program Files\Tesseract-OCR\tesseract.exe" "assets\tesseract\tesseract.exe"
-          copy "C:\Program Files\Tesseract-OCR\*.dll" "assets\tesseract\"
-
-      - name: Baixar idiomas do Tesseract
-        shell: cmd
-        run: |
-          curl -L -o "assets\tesseract\tessdata\por.traineddata" "https://github.com/tesseract-ocr/tessdata/raw/main/por.traineddata"
-          curl -L -o "assets\tesseract\tessdata\eng.traineddata" "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata"
-          curl -L -o "assets\tesseract\tessdata\osd.traineddata" "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata"
-
-      - name: Verificar Tesseract empacotado
-        shell: cmd
-        run: |
-          dir assets\tesseract
-          dir assets\tesseract\tessdata
-          "assets\tesseract\tesseract.exe" --version
+          pip install python-docx==1.1.0 openpyxl==3.1.2 pywin32==306 pillow==10.2.0 lxml==5.1.0 python-dateutil selenium pyinstaller==6.3.0
 
       # ========================================================
       # GERAR EXE
@@ -82,15 +49,17 @@ jobs:
             --hidden-import openpyxl ^
             --hidden-import openpyxl.styles ^
             --hidden-import openpyxl.drawing.image ^
-            --hidden-import pytesseract ^
-            --hidden-import fitz ^
             --hidden-import lxml.etree ^
+            --hidden-import selenium ^
+            --hidden-import selenium.webdriver ^
+            --hidden-import selenium.webdriver.chrome.service ^
+            --hidden-import selenium.webdriver.support.ui ^
+            --hidden-import selenium.webdriver.support.expected_conditions ^
             --collect-all win32com ^
             --collect-all docx ^
             --collect-all openpyxl ^
             --collect-all lxml ^
-            --collect-all pytesseract ^
-            --collect-all fitz ^
+            --collect-all selenium ^
             app.py
 
       - name: Upload do EXE
