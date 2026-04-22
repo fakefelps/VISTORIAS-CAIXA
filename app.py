@@ -1602,10 +1602,11 @@ def _scpo_executar(dados, step_cb, log_cb, done_cb,
 
         # Datas
         try:
+            from dateutil.relativedelta import relativedelta
+            data_termino = (datetime.date.today() + relativedelta(months=1)).strftime("%d/%m/%Y")
             driver.find_element(_By_scpo.ID, "txtInicio").send_keys(dados["data_inicio"])
-            driver.find_element(_By_scpo.ID, "txtTermino").send_keys(
-                _scpo_data_termino(dados["data_inicio"]))
-            log_cb(f"  Datas: {dados['data_inicio']} → {_scpo_data_termino(dados['data_inicio'])}")
+            driver.find_element(_By_scpo.ID, "txtTermino").send_keys(data_termino)
+            log_cb(f"  Datas: {dados['data_inicio']} → {data_termino}")
         except Exception as e: log_cb(f"  Datas: {e}")
 
         # Empregados
