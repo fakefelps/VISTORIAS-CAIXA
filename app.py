@@ -39,6 +39,7 @@ multiprocessing.freeze_support()
 # IMPORTS
 # ============================================================
 import os
+import tempfile
 import sys
 import shutil
 import zipfile
