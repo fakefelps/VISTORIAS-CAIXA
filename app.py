@@ -113,7 +113,7 @@ from lxml import etree
 # CONSTANTES GLOBAIS
 # ============================================================
 
-# ----- Pasta de destino (ALTERADO v4) -----
+# ----- Pasta de destino -----
 PASTA_DESTINO = "DOCUMENTOS DE VISTORIA"
 
 # ----- Templates Word -----
@@ -122,36 +122,50 @@ TEMPLATE_ESGOTO = "TEMPLETE PARA ESGOTO.docx"
 FOSSA_LINHA_ASS = 36
 ESGOTO_LINHA_ASS = 41
 
-# ----- Template Excel (embutido em assets — NÃO selecionado pelo usuário) -----
-# Cada execução parte de uma cópia limpa do template virgem.
-# Para atualizar o template: substituir assets/MEMORIAL_TEMPLATE.xlsx e rebuild.
-TEMPLATE_EXCEL = "MEMORIAL_TEMPLATE.xlsx"
+# ----- Checkboxes — método IMAGEM (PNG sobreposto via Shapes.AddPicture) -----
+# Valores calibrados com o Calibrador do Memorial.
+# Para recalibrar: rodar o Calibrador, ajustar até o PDF ficar correto,
+# copiar os valores gerados e colar aqui substituindo os blocos abaixo.
+#
+# 1. Esgoto SIM
+CHK1_ANCORA  = "AM70"
+CHK1_OFF_X   = 10
+CHK1_OFF_Y   = 3
+CHK1_LARGURA = 4
+CHK1_ALTURA  = 5
+# 2. Esgoto NÃO
+CHK2_ANCORA  = "AP70"
+CHK2_OFF_X   = 11
+CHK2_OFF_Y   = 3
+CHK2_LARGURA = 4
+CHK2_ALTURA  = 5
+# 3. Condomínio SIM
+CHK3_ANCORA  = "AM65"
+CHK3_OFF_X   = 10
+CHK3_OFF_Y   = 8
+CHK3_LARGURA = 4
+CHK3_ALTURA  = 5
+# 4. Condomínio Não se aplica
+CHK4_ANCORA  = "AS65"
+CHK4_OFF_X   = 12
+CHK4_OFF_Y   = 8
+CHK4_LARGURA = 4
+CHK4_ALTURA  = 5
 
-# ----- Checkboxes — shapes nativos do template (método XML/cor) -----
-# Pintar solidFill=000000 = marcado | remover solidFill = desmarcado (vazio)
-# Confirmados via inspeção do drawing1.xml do MEMORIAL_TEMPLATE.xlsx.
-#
-# Esgoto (linha 70) — variável, controlado pelo app:
-SHAPE_ESGOTO_SIM = "QO012,12.L0C0;L0C-34^"
-SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
-#
-# Loteamentos (linha 64) — FIXO = Não se aplica (já marcado no template virgem).
-# O app NÃO toca nesses shapes.
-#
-# Condomínios (linha 65) — variável, controlado pelo app:
-SHAPE_COND_SIM = "QOCN,13.L0C-32;L0C-34^"
-SHAPE_COND_NAO = "QOCN,23.L0C-35;L0C-37^"
-SHAPE_COND_NSA = "QOCN,33.L0C-38;L0C-40^"
+# Loteamentos — fixo NSA, sempre inserido
+CHK_LOT_NSA_ANCORA  = "AS64"
+CHK_LOT_NSA_OFF_X   = 12
+CHK_LOT_NSA_OFF_Y   = 8
+CHK_LOT_NSA_LARGURA = 4
+CHK_LOT_NSA_ALTURA  = 5
 
 # Estado de condomínios — atualizado pela UI antes do processamento
 GEMINADAS_CONDOMINIOS = "nao_se_aplica"
 
-
-# ----- Assinatura Word (DECLARAÇÃO) — +50% v4 -----
-# Antes: Inches(1.8). Agora: Inches(2.7) — aumento proporcional de 50%.
+# ----- Assinatura Word (DECLARAÇÃO) -----
 ASSINATURA_WORD_LARGURA = Inches(2.7)
 
-# ----- Assinatura Excel (MEMORIAL) — calibrado 17/04/2026 -----
+# ----- Assinatura Excel (MEMORIAL) — calibrado -----
 ASSINATURA_EXCEL_ANCORA      = "AE72"
 ASSINATURA_EXCEL_OFFSET_X_PT = 10
 ASSINATURA_EXCEL_OFFSET_Y_PT = -5
@@ -425,140 +439,24 @@ def preencher_word(esgoto_sim, saida_path, dados, num_casa, log=None):
         log(f"  ✓ Word gerado: {os.path.basename(saida_path)}")
 
 
-def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
-    """
-    Marca os checkboxes variáveis do Memorial via XML direto no .xlsx.
-
-    Esses shapes usam <a14:hiddenFill> dentro de <a:extLst> como fill real
-    (comportamento de shapes legados do Excel). É necessário atualizar TANTO
-    o solidFill direto do spPr quanto o hiddenFill no extLst — caso contrário
-    a cor não aparece na renderização.
-
-    Shapes controlados:
-      - Esgoto SIM/NÃO  (linha 70): SHAPE_ESGOTO_SIM / SHAPE_ESGOTO_NAO
-      - Condomínios      (linha 65): SHAPE_COND_SIM / SHAPE_COND_NAO / SHAPE_COND_NSA
-      - Loteamentos      (linha 64): NÃO TOCADO — fixo no template virgem
-    """
-    import tempfile, shutil, zipfile
-    from lxml import etree
-
-    NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
-    NS_A   = "http://schemas.openxmlformats.org/drawingml/2006/main"
-    NS_A14 = "http://schemas.microsoft.com/office/drawing/2010/main"
-    NS_MC  = "http://schemas.openxmlformats.org/markup-compatibility/2006"
-
-    # Mapa shape → deve ficar marcado (True) ou desmarcado (False)
-    mapa = {
-        SHAPE_ESGOTO_SIM: esgoto_sim,
-        SHAPE_ESGOTO_NAO: not esgoto_sim,
-        SHAPE_COND_SIM:   GEMINADAS_CONDOMINIOS == "sim",
-        SHAPE_COND_NAO:   GEMINADAS_CONDOMINIOS == "nao",
-        SHAPE_COND_NSA:   GEMINADAS_CONDOMINIOS == "nao_se_aplica",
-    }
-
-    def _set_fill(sp_pr, marcado):
-        """
-        Atualiza o fill em dois lugares:
-          1. solidFill direto no spPr (fill padrão DrawingML)
-          2. hiddenFill dentro de extLst (fill legado que o Excel prioriza)
-        """
-        cor = "000000" if marcado else "FFFFFF"
-
-        # ── 1. solidFill direto no spPr ─────────────────────────────────────
-        for tag in [f"{{{NS_A}}}solidFill", f"{{{NS_A}}}noFill", f"{{{NS_A}}}gradFill"]:
-            el = sp_pr.find(tag)
-            if el is not None:
-                sp_pr.remove(el)
-
-        solid = etree.Element(f"{{{NS_A}}}solidFill")
-        srgb  = etree.SubElement(solid, f"{{{NS_A}}}srgbClr")
-        srgb.set("val", cor)
-        xfrm = sp_pr.find(f"{{{NS_A}}}xfrm")
-        if xfrm is not None:
-            xfrm.addnext(solid)
-        else:
-            sp_pr.insert(0, solid)
-
-        # ── 2. hiddenFill dentro de extLst ──────────────────────────────────
-        ext_lst = sp_pr.find(f"{{{NS_A}}}extLst")
-        if ext_lst is None:
-            return  # sem extLst, o solidFill direto já basta
-
-        URI_HIDDEN = "{909E8E84-426E-40DD-AFC4-6F175D3DCCD1}"
-        for ext in ext_lst.findall(f"{{{NS_A}}}ext"):
-            if ext.get("uri") != URI_HIDDEN:
-                continue
-            hidden = ext.find(f"{{{NS_A14}}}hiddenFill")
-            if hidden is None:
-                continue
-            # Substituir o solidFill dentro do hiddenFill
-            for child in list(hidden):
-                hidden.remove(child)
-            hsolid = etree.SubElement(hidden, f"{{{NS_A}}}solidFill")
-            hsrgb  = etree.SubElement(hsolid, f"{{{NS_A}}}srgbClr")
-            hsrgb.set("val", cor)
-            # Atributos de compatibilidade que o Excel espera
-            hsrgb.set(f"{{{NS_MC}}}Ignorable", "a14")
-            hsrgb.set(f"{{{NS_A14}}}legacySpreadsheetColorIndex",
-                      "8" if marcado else "65")
-
-    try:
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
-        os.close(tmp_fd)
-        shutil.copy2(xlsx_path, tmp_path)
-
-        shapes_ok = 0
-
-        with zipfile.ZipFile(tmp_path, "r") as zi, \
-             zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
-
-            for item in zi.infolist():
-                data = zi.read(item.filename)
-
-                if item.filename.startswith("xl/drawings/drawing") and \
-                   item.filename.endswith(".xml"):
-                    try:
-                        root = etree.fromstring(data)
-                        nsmap = {"xdr": NS_XDR, "a": NS_A}
-
-                        for sp in root.iter(f"{{{NS_XDR}}}sp"):
-                            cnv  = sp.find(".//xdr:nvSpPr/xdr:cNvPr", nsmap)
-                            nome = cnv.get("name", "") if cnv is not None else ""
-                            if nome not in mapa:
-                                continue
-                            sp_pr = sp.find(".//xdr:spPr", nsmap)
-                            if sp_pr is None:
-                                continue
-                            _set_fill(sp_pr, mapa[nome])
-                            shapes_ok += 1
-
-                        data = etree.tostring(
-                            root,
-                            xml_declaration=True,
-                            encoding="UTF-8",
-                            standalone=True,
-                        )
-                    except Exception as e:
-                        if log:
-                            log(f"  ⚠ Erro ao processar {item.filename}: {e}")
-
-                zo.writestr(item, data)
-
-        os.unlink(tmp_path)
-
-        if shapes_ok == 0:
-            if log:
-                log("  ⚠ Nenhum shape de checkbox encontrado no XML")
-        else:
-            if log:
-                log(f"  ✓ {shapes_ok} checkbox(es) marcado(s) via XML")
-
-    except Exception as e:
-        if log:
-            log(f"  ✗ Falha ao aplicar checkboxes: {e}")
+def _quadrado_preto_temp():
+    """Gera PNG temporário de quadrado preto sólido (■)."""
+    tmp = tempfile.mktemp(suffix=".png")
+    Image.new("RGBA", (20, 20), (0, 0, 0, 255)).save(tmp)
+    return tmp
 
 
-
+def _inserir_checkbox_img(ws, ancora, off_x, off_y, largura, altura, img_path):
+    """Insere quadrado preto em posição calibrada via Shapes.AddPicture."""
+    cell = ws.Range(ancora)
+    ws.Shapes.AddPicture(
+        os.path.abspath(img_path),
+        False, True,
+        cell.Left + off_x,
+        cell.Top  + off_y,
+        largura,
+        altura,
+    )
 
 
 def _fechar_excel(xl, wb):
@@ -579,7 +477,7 @@ def _fechar_excel(xl, wb):
 def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log=None):
     """
     Copia o template virgem para xlsx_saida e preenche via win32com.
-    Checkboxes NÃO são tocados aqui — feitos depois por _aplicar_checkboxes_xml.
+    Checkboxes inseridos via imagem na mesma sessão COM.
     """
     import pythoncom, win32com.client
 
@@ -651,6 +549,41 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log
             except Exception as e:
                 if log:
                     log(f"  ⚠ Falha ao inserir assinatura: {e}")
+
+        # ── Checkboxes via imagem (método calibrado) ─────────────────────────
+        q = _quadrado_preto_temp()
+        try:
+            # Esgoto SIM ou NÃO
+            if esgoto_sim:
+                _inserir_checkbox_img(ws, CHK1_ANCORA, CHK1_OFF_X, CHK1_OFF_Y,
+                                      CHK1_LARGURA, CHK1_ALTURA, q)
+                if log: log(f"  ✓ Checkbox esgoto SIM ({CHK1_ANCORA})")
+            else:
+                _inserir_checkbox_img(ws, CHK2_ANCORA, CHK2_OFF_X, CHK2_OFF_Y,
+                                      CHK2_LARGURA, CHK2_ALTURA, q)
+                if log: log(f"  ✓ Checkbox esgoto NÃO ({CHK2_ANCORA})")
+
+            # Condomínios
+            if GEMINADAS_CONDOMINIOS == "sim":
+                _inserir_checkbox_img(ws, CHK3_ANCORA, CHK3_OFF_X, CHK3_OFF_Y,
+                                      CHK3_LARGURA, CHK3_ALTURA, q)
+                if log: log(f"  ✓ Checkbox condomínio SIM ({CHK3_ANCORA})")
+            elif GEMINADAS_CONDOMINIOS == "nao_se_aplica":
+                _inserir_checkbox_img(ws, CHK4_ANCORA, CHK4_OFF_X, CHK4_OFF_Y,
+                                      CHK4_LARGURA, CHK4_ALTURA, q)
+                if log: log(f"  ✓ Checkbox condomínio NSA ({CHK4_ANCORA})")
+
+            # Loteamentos — sempre NSA (fixo)
+            _inserir_checkbox_img(ws, CHK_LOT_NSA_ANCORA, CHK_LOT_NSA_OFF_X,
+                                  CHK_LOT_NSA_OFF_Y, CHK_LOT_NSA_LARGURA,
+                                  CHK_LOT_NSA_ALTURA, q)
+            if log: log(f"  ✓ Checkbox loteamento NSA ({CHK_LOT_NSA_ANCORA})")
+
+        except Exception as e:
+            if log: log(f"  ⚠ Falha ao inserir checkboxes: {e}")
+        finally:
+            try: os.unlink(q)
+            except: pass
 
         # Salvar como .xlsx (51 = xlOpenXMLWorkbook)
         wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)
@@ -1355,6 +1288,10 @@ class App(tk.Tk):
         col_dir.pack(side="right", fill="both", expand=True, padx=(10, 0))
 
         # --- Coluna esquerda ---
+        self._secao_label(col_esq, "MEMORIAL EXCEL")
+        self.var_memorial = tk.StringVar()
+        self._campo_arquivo(col_esq, self.var_memorial, "Arquivo Memorial (.xls/.xlsx)")
+
         self._secao_label(col_esq, "ENGENHEIRO RESPONSÁVEL")
         self.var_engenheiro = tk.StringVar()
         combo_eng = ttk.Combobox(
@@ -1441,6 +1378,16 @@ class App(tk.Tk):
             state="disabled",
         )
         self.btn_stop.pack(side="right", fill="x", expand=True, padx=(5, 0))
+
+        # Botão Calibrar — linha abaixo de GERAR/INTERROMPER
+        frame_calibrar = tk.Frame(col_dir, bg=COR_FUNDO)
+        frame_calibrar.pack(side="bottom", fill="x", pady=(0, 4))
+        tk.Button(
+            frame_calibrar, text="⚙ CALIBRAR MEMORIAL",
+            command=self._abrir_calibrador,
+            bg="#4a4a6a", fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 10, "bold"), pady=6,
+        ).pack(fill="x")
 
         # Botão SCPO — linha separada abaixo
         frame_botoes2 = tk.Frame(col_dir, bg=COR_FUNDO)
@@ -1706,7 +1653,9 @@ class App(tk.Tk):
 
     def _iniciar_geracao(self):
         """Valida entradas e dispara thread de processamento."""
-        # Validações básicas
+        if not self.var_memorial.get() or not os.path.exists(self.var_memorial.get()):
+            messagebox.showerror("Erro", "Selecione um arquivo Memorial Excel válido.")
+            return
         if not self.var_engenheiro.get():
             messagebox.showerror("Erro", "Selecione o engenheiro responsável.")
             return
@@ -1723,6 +1672,11 @@ class App(tk.Tk):
         self.txt_log.delete("1.0", "end")
 
         threading.Thread(target=self._processar, daemon=True).start()
+
+    def _abrir_calibrador(self):
+        """Abre a janela do Calibrador do Memorial."""
+        memorial = self.var_memorial.get().strip()
+        JanelaCalibrador(self, memorial if os.path.exists(memorial) else None)
 
     def _buscar_cep(self):
         """Consulta ViaCEP e preenche logradouro, bairro, cidade e UF."""
@@ -1919,7 +1873,6 @@ class App(tk.Tk):
     # Thread de processamento
     # ------------------------------------------------------------------
     def _processar(self):
-        template_excel_temp = None  # inicializado antes do try para o finally
         try:
             eng_nome = self.var_engenheiro.get()
             eng_info = ENGENHEIROS[eng_nome]
@@ -1936,7 +1889,7 @@ class App(tk.Tk):
                 "crea": self.var_crea.get(),
                 "art": self.var_art.get(),
                 "contratante": self.var_contratante.get(),
-                "logradouro": self._get_rua_casa(1),  # atualizado por casa no loop
+                "logradouro": self._get_rua_casa(1),
                 "quadra_lote": self.var_quadra_lote.get(),
                 "bairro": self.var_bairro.get(),
                 "cep": self.var_cep.get(),
@@ -1947,29 +1900,24 @@ class App(tk.Tk):
 
             esgoto_sim = self.var_esgoto.get()
 
-            # Atualizar estado global de condomínios
             _mg = {"Não se aplica": "nao_se_aplica", "Sim": "sim", "Não": "nao"}
             global GEMINADAS_CONDOMINIOS
             GEMINADAS_CONDOMINIOS = _mg.get(self.var_gem_cond.get(), "nao_se_aplica")
             qtd = self.var_qtd_casas.get()
 
-            # Template Excel embutido em assets — sempre parte de cópia limpa
-            template_excel = asset(TEMPLATE_EXCEL)
-            if not os.path.exists(template_excel):
-                raise FileNotFoundError(
-                    f"Template Excel não encontrado em assets: {TEMPLATE_EXCEL}"
-                )
+            # Template Excel selecionado pelo usuário
+            template_excel = self.var_memorial.get()
+            if not template_excel or not os.path.exists(template_excel):
+                raise FileNotFoundError("Selecione um arquivo Memorial válido.")
 
-            # Pasta destino — sem subpasta de data
+            # Pasta destino
             rua_qd_lt = f"{dados['logradouro']} {dados['quadra_lote']}".strip()
-            rua_qd_lt = re.sub(r"[<>:\"/\\|?*]", "", rua_qd_lt)  # sanitizar
-            pasta_saida = (
-                Path.home() / "Downloads" / PASTA_DESTINO / rua_qd_lt
-            )
+            rua_qd_lt = re.sub(r"[<>:\"/\\|?*]", "", rua_qd_lt)
+            pasta_saida = Path.home() / "Downloads" / PASTA_DESTINO / rua_qd_lt
             pasta_saida.mkdir(parents=True, exist_ok=True)
             self.log(f"📁 Pasta destino: {pasta_saida}")
 
-            total_etapas = qtd * 4  # Word, Word→PDF, Excel, Excel→PDF
+            total_etapas = qtd * 4
             etapa_atual = 0
 
             for i in range(1, qtd + 1):
@@ -1982,7 +1930,7 @@ class App(tk.Tk):
 
                 # 1. Word
                 self._check_stop()
-                self.log(f"• Gerando Declaração (Word)...")
+                self.log("• Gerando Declaração (Word)...")
                 docx_path = pasta_saida / f"DECLARACAO_{base_nome}.docx"
                 preencher_word(esgoto_sim, str(docx_path), dados, i, log=self.log)
                 etapa_atual += 1
@@ -1990,33 +1938,26 @@ class App(tk.Tk):
 
                 # 2. Word → PDF
                 self._check_stop()
-                self.log(f"• Convertendo Declaração para PDF...")
+                self.log("• Convertendo Declaração para PDF...")
                 pdf_decl = pasta_saida / f"DECLARACAO_{base_nome}.pdf"
                 _word_para_pdf(str(docx_path), str(pdf_decl), log=self.log)
                 etapa_atual += 1
                 self._set_progress(etapa_atual * 100 / total_etapas)
 
-                # 3. Excel — preencher + checkboxes XML
+                # 3. Excel — preencher + checkboxes imagem (na mesma sessão COM)
                 self._check_stop()
-                self.log(f"• Preenchendo Memorial (Excel)...")
+                self.log("• Preenchendo Memorial (Excel)...")
                 xlsx_path = pasta_saida / f"MEMORIAL_{base_nome}.xlsx"
                 _excel_preencher(
                     template_excel, str(xlsx_path), dados, i,
                     esgoto_sim, log=self.log,
                 )
-
-                self._check_stop()
-                self.log(f"• Aplicando checkboxes (XML nativo)...")
-                _aplicar_checkboxes_xml(
-                    str(xlsx_path), esgoto_sim, log=self.log,
-                )
-
                 etapa_atual += 1
                 self._set_progress(etapa_atual * 100 / total_etapas)
 
                 # 4. Excel → PDF
                 self._check_stop()
-                self.log(f"• Convertendo Memorial para PDF...")
+                self.log("• Convertendo Memorial para PDF...")
                 pdf_mem = pasta_saida / f"MEMORIAL_{base_nome}.pdf"
                 _excel_para_pdf(str(xlsx_path), str(pdf_mem), log=self.log)
                 etapa_atual += 1
@@ -2024,7 +1965,7 @@ class App(tk.Tk):
 
             self._set_status("Concluído!")
             self._set_progress(100)
-            self.log(f"\n✅ Todos os documentos gerados com sucesso!")
+            self.log("\n✅ Todos os documentos gerados com sucesso!")
             self.log(f"📂 Pasta: {pasta_saida}")
             self.after(0, lambda: messagebox.showinfo(
                 "Sucesso", f"Documentos gerados em:\n{pasta_saida}"))
@@ -2046,7 +1987,475 @@ class App(tk.Tk):
 
 
 # ============================================================
+# CALIBRADOR — janela Toplevel integrada ao app principal
+# ============================================================
+
+def _carregar_calibracao():
+    """
+    Lê ~/.bercan_config.json e aplica os valores calibrados nas
+    constantes globais CHK* e ASSINATURA_EXCEL_*.
+    Se o arquivo não existir ou a chave estiver ausente, mantém o default.
+    """
+    cfg = _config_carregar()
+    if not cfg.get("calibrado"):
+        return  # ainda não foi calibrado — usa defaults
+
+    global CHK1_ANCORA, CHK1_OFF_X, CHK1_OFF_Y, CHK1_LARGURA, CHK1_ALTURA
+    global CHK2_ANCORA, CHK2_OFF_X, CHK2_OFF_Y, CHK2_LARGURA, CHK2_ALTURA
+    global CHK3_ANCORA, CHK3_OFF_X, CHK3_OFF_Y, CHK3_LARGURA, CHK3_ALTURA
+    global CHK4_ANCORA, CHK4_OFF_X, CHK4_OFF_Y, CHK4_LARGURA, CHK4_ALTURA
+    global CHK_LOT_NSA_ANCORA, CHK_LOT_NSA_OFF_X, CHK_LOT_NSA_OFF_Y
+    global CHK_LOT_NSA_LARGURA, CHK_LOT_NSA_ALTURA
+    global ASSINATURA_EXCEL_ANCORA, ASSINATURA_EXCEL_OFFSET_X_PT
+    global ASSINATURA_EXCEL_OFFSET_Y_PT, ASSINATURA_EXCEL_LARGURA_PT
+    global ASSINATURA_EXCEL_ALTURA_PT
+
+    def _i(k, fallback): return int(cfg.get(k, fallback))
+    def _s(k, fallback): return str(cfg.get(k, fallback))
+
+    CHK1_ANCORA  = _s("chk1_ancora",  CHK1_ANCORA)
+    CHK1_OFF_X   = _i("chk1_off_x",   CHK1_OFF_X)
+    CHK1_OFF_Y   = _i("chk1_off_y",   CHK1_OFF_Y)
+    CHK1_LARGURA = _i("chk1_larg",    CHK1_LARGURA)
+    CHK1_ALTURA  = _i("chk1_alt",     CHK1_ALTURA)
+
+    CHK2_ANCORA  = _s("chk2_ancora",  CHK2_ANCORA)
+    CHK2_OFF_X   = _i("chk2_off_x",   CHK2_OFF_X)
+    CHK2_OFF_Y   = _i("chk2_off_y",   CHK2_OFF_Y)
+    CHK2_LARGURA = _i("chk2_larg",    CHK2_LARGURA)
+    CHK2_ALTURA  = _i("chk2_alt",     CHK2_ALTURA)
+
+    CHK3_ANCORA  = _s("chk3_ancora",  CHK3_ANCORA)
+    CHK3_OFF_X   = _i("chk3_off_x",   CHK3_OFF_X)
+    CHK3_OFF_Y   = _i("chk3_off_y",   CHK3_OFF_Y)
+    CHK3_LARGURA = _i("chk3_larg",    CHK3_LARGURA)
+    CHK3_ALTURA  = _i("chk3_alt",     CHK3_ALTURA)
+
+    CHK4_ANCORA  = _s("chk4_ancora",  CHK4_ANCORA)
+    CHK4_OFF_X   = _i("chk4_off_x",   CHK4_OFF_X)
+    CHK4_OFF_Y   = _i("chk4_off_y",   CHK4_OFF_Y)
+    CHK4_LARGURA = _i("chk4_larg",    CHK4_LARGURA)
+    CHK4_ALTURA  = _i("chk4_alt",     CHK4_ALTURA)
+
+    CHK_LOT_NSA_ANCORA  = _s("chk_lot_ancora", CHK_LOT_NSA_ANCORA)
+    CHK_LOT_NSA_OFF_X   = _i("chk_lot_off_x",  CHK_LOT_NSA_OFF_X)
+    CHK_LOT_NSA_OFF_Y   = _i("chk_lot_off_y",  CHK_LOT_NSA_OFF_Y)
+    CHK_LOT_NSA_LARGURA = _i("chk_lot_larg",   CHK_LOT_NSA_LARGURA)
+    CHK_LOT_NSA_ALTURA  = _i("chk_lot_alt",    CHK_LOT_NSA_ALTURA)
+
+    ASSINATURA_EXCEL_ANCORA      = _s("ass_ancora",  ASSINATURA_EXCEL_ANCORA)
+    ASSINATURA_EXCEL_OFFSET_X_PT = _i("ass_off_x",   ASSINATURA_EXCEL_OFFSET_X_PT)
+    ASSINATURA_EXCEL_OFFSET_Y_PT = _i("ass_off_y",   ASSINATURA_EXCEL_OFFSET_Y_PT)
+    ASSINATURA_EXCEL_LARGURA_PT  = _i("ass_larg",    ASSINATURA_EXCEL_LARGURA_PT)
+    ASSINATURA_EXCEL_ALTURA_PT   = _i("ass_alt",     ASSINATURA_EXCEL_ALTURA_PT)
+
+
+class JanelaCalibrador(tk.Toplevel):
+    """
+    Calibrador do Memorial — abre como janela filha do app principal.
+    Permite ajustar posição/tamanho dos checkboxes e assinatura,
+    gera um PDF de preview e salva os valores no config JSON.
+    """
+
+    # Mapa de estados para calibrar
+    ESTADOS = {
+        1: ("Esgoto — SIM",               "#2e86de"),
+        2: ("Esgoto — NÃO",               "#e74c3c"),
+        3: ("Condomínio — SIM",           "#27ae60"),
+        4: ("Condomínio — Não se aplica", "#e67e22"),
+    }
+
+    def __init__(self, parent, memorial_path=None):
+        super().__init__(parent)
+        self.title("⚙ Calibrador do Memorial — Morais Engenharia")
+        self.geometry("860x780")
+        self.configure(bg=COR_FUNDO)
+        self.resizable(True, True)
+        self.grab_set()  # modal
+
+        self._vars = {}
+        self._estado_atual = 1
+        self._memorial_path = memorial_path
+
+        self._criar_ui()
+
+        # Pré-carregar valores do config se existir
+        self._carregar_do_config()
+
+        # Pré-preencher memorial se já estava selecionado no app
+        if memorial_path:
+            self._vars["memorial"].set(memorial_path)
+
+    # ── Construção da UI ─────────────────────────────────────────────
+
+    def _criar_ui(self):
+        # Cabeçalho
+        hdr = tk.Frame(self, bg=COR_FUNDO, pady=10)
+        hdr.pack(fill="x", padx=20)
+        tk.Label(hdr, text="CALIBRADOR DO MEMORIAL",
+                 font=("Segoe UI", 14, "bold"),
+                 fg=COR_TEXTO, bg=COR_FUNDO).pack(anchor="w")
+        tk.Label(hdr,
+                 text="Ajuste checkboxes e assinatura • preview em PDF • salva automaticamente",
+                 font=("Segoe UI", 9), fg=COR_TEXTO_SEC, bg=COR_FUNDO).pack(anchor="w")
+        tk.Frame(self, bg="#2a3f55", height=1).pack(fill="x")
+
+        # Rodapé com botões
+        rodape = tk.Frame(self, bg=COR_FUNDO, pady=8)
+        rodape.pack(side="bottom", fill="x", padx=20)
+        tk.Frame(rodape, bg="#2a3f55", height=1).pack(fill="x", pady=(0, 8))
+
+        self.btn_preview = tk.Button(
+            rodape, text="⚡ GERAR PREVIEW (abre PDF)",
+            command=self._iniciar_preview,
+            bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 11, "bold"), pady=8,
+        )
+        self.btn_preview.pack(fill="x", pady=(0, 4))
+
+        tk.Button(
+            rodape, text="💾 SALVAR CALIBRAÇÃO",
+            command=self._salvar,
+            bg="#27ae60", fg=COR_TEXTO, relief="flat",
+            font=("Segoe UI", 11, "bold"), pady=8,
+        ).pack(fill="x")
+
+        self.var_status = tk.StringVar(value="Aguardando...")
+        tk.Label(rodape, textvariable=self.var_status,
+                 bg=COR_FUNDO, fg=COR_TEXTO_SEC,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 0))
+
+        # Corpo em duas colunas
+        body = tk.Frame(self, bg=COR_FUNDO)
+        body.pack(fill="both", expand=True, padx=20, pady=8)
+
+        col_esq = tk.Frame(body, bg=COR_FUNDO, width=380)
+        col_esq.pack(side="left", fill="y", padx=(0, 12))
+        col_esq.pack_propagate(False)
+
+        col_dir = tk.Frame(body, bg=COR_FUNDO)
+        col_dir.pack(side="left", fill="both", expand=True)
+
+        # ── Coluna esquerda: controles ───────────────────────────────
+        self._label_sec(col_esq, "ARQUIVO MEMORIAL")
+        self._vars["memorial"] = tk.StringVar()
+        self._campo_arquivo(col_esq, self._vars["memorial"],
+                            "Selecionar .xls/.xlsx")
+
+        self._label_sec(col_esq, "ASSINATURA (opcional)")
+        self._vars["assinatura"] = tk.StringVar()
+        self._campo_arquivo(col_esq, self._vars["assinatura"],
+                            "Selecionar imagem de assinatura")
+
+        self._label_sec(col_esq, "ASSINATURA — POSIÇÃO")
+        self._spinbox(col_esq, "Âncora",   "ass_ancora",  "AE72", texto=True)
+        self._spinbox(col_esq, "Offset X", "ass_off_x",   10, -200, 200)
+        self._spinbox(col_esq, "Offset Y", "ass_off_y",   -5, -200, 200)
+        self._spinbox(col_esq, "Largura",  "ass_larg",    170,  10, 500)
+        self._spinbox(col_esq, "Altura",   "ass_alt",     55,   5, 300)
+
+        self._label_sec(col_esq, "CHECKBOX — ESTADO")
+        fr_est = tk.Frame(col_esq, bg=COR_FUNDO)
+        fr_est.pack(fill="x", pady=(0, 4))
+        self.var_estado = tk.IntVar(value=1)
+        for n, (lbl, cor) in self.ESTADOS.items():
+            tk.Radiobutton(
+                fr_est, text=lbl, variable=self.var_estado, value=n,
+                command=self._trocar_estado,
+                bg=COR_FUNDO, fg=cor, selectcolor=COR_CAMPO,
+                activebackground=COR_FUNDO, activeforeground=cor,
+                font=("Segoe UI", 9),
+            ).pack(anchor="w")
+
+        self.lbl_estado = tk.Label(col_esq,
+                                   text="Estado 1 — Esgoto — SIM",
+                                   fg="#2e86de", bg=COR_FUNDO,
+                                   font=("Segoe UI", 9, "bold"))
+        self.lbl_estado.pack(anchor="w", pady=(2, 4))
+
+        self._label_sec(col_esq, "CHECKBOX — POSIÇÃO")
+        self._spinbox(col_esq, "Âncora",   "chk_ancora", "AM70", texto=True)
+        self._spinbox(col_esq, "Offset X", "chk_off_x",   10, -200, 200)
+        self._spinbox(col_esq, "Offset Y", "chk_off_y",    3, -200, 200)
+        self._spinbox(col_esq, "Largura",  "chk_larg",     4,   1, 100)
+        self._spinbox(col_esq, "Altura",   "chk_alt",      5,   1, 100)
+
+        # ── Coluna direita: log ──────────────────────────────────────
+        self._label_sec(col_dir, "LOG")
+        self.txt_log = tk.Text(
+            col_dir, bg=COR_LOG_FUNDO, fg="#7ec8a0",
+            font=("Consolas", 9), relief="flat",
+            state="disabled",
+        )
+        sb = tk.Scrollbar(col_dir, command=self.txt_log.yview)
+        self.txt_log.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.txt_log.pack(fill="both", expand=True)
+
+    # ── Widgets helper ────────────────────────────────────────────────
+
+    def _label_sec(self, p, txt):
+        tk.Label(p, text=txt, font=("Segoe UI", 9, "bold"),
+                 fg=COR_TEXTO, bg=COR_FUNDO).pack(anchor="w", pady=(10, 2))
+
+    def _campo_arquivo(self, p, var, hint):
+        fr = tk.Frame(p, bg=COR_FUNDO)
+        fr.pack(fill="x", pady=(0, 4))
+        tk.Entry(fr, textvariable=var, bg=COR_CAMPO, fg=COR_TEXTO,
+                 insertbackground=COR_TEXTO, relief="flat",
+                 font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+        tk.Button(fr, text="📁",
+                  command=lambda: var.set(
+                      filedialog.askopenfilename(
+                          filetypes=[("Excel/Imagem",
+                                      "*.xls *.xlsx *.png *.jpg *.jpeg")]) or var.get()),
+                  bg=COR_BOTAO, fg=COR_TEXTO, relief="flat",
+                  font=("Segoe UI", 9)).pack(side="right", padx=(4, 0))
+
+    def _spinbox(self, p, label, key, default, mn=-999, mx=9999, texto=False):
+        fr = tk.Frame(p, bg=COR_FUNDO)
+        fr.pack(fill="x", pady=1)
+        tk.Label(fr, text=label, width=10, anchor="w",
+                 fg=COR_TEXTO_SEC, bg=COR_FUNDO,
+                 font=("Segoe UI", 9)).pack(side="left")
+        var = tk.StringVar(value=str(default))
+        self._vars[key] = var
+        if texto:
+            tk.Entry(fr, textvariable=var, width=10, bg=COR_CAMPO, fg=COR_TEXTO,
+                     insertbackground=COR_TEXTO, relief="flat",
+                     font=("Segoe UI", 10, "bold")).pack(side="left")
+        else:
+            tk.Spinbox(fr, textvariable=var, from_=mn, to=mx, width=7,
+                       bg=COR_CAMPO, fg=COR_TEXTO, buttonbackground=COR_CAMPO,
+                       relief="flat", insertbackground=COR_TEXTO,
+                       font=("Segoe UI", 10, "bold")).pack(side="left")
+            tk.Button(fr, text="-5",
+                      command=lambda v=var: self._nudge(v, -5),
+                      bg="#2a3f55", fg=COR_TEXTO_SEC, relief="flat",
+                      font=("Segoe UI", 8), padx=3).pack(side="left", padx=(6, 1))
+            tk.Button(fr, text="+5",
+                      command=lambda v=var: self._nudge(v, +5),
+                      bg="#2a3f55", fg=COR_TEXTO_SEC, relief="flat",
+                      font=("Segoe UI", 8), padx=3).pack(side="left", padx=1)
+
+    def _nudge(self, var, d):
+        try: var.set(str(int(var.get()) + d))
+        except: pass
+
+    # ── Estado dos checkboxes ─────────────────────────────────────────
+
+    # Armazena valores por estado (1-4)
+    _estado_vals = {}
+
+    def _trocar_estado(self):
+        self._salvar_estado_atual()
+        n = self.var_estado.get()
+        self._estado_atual = n
+        lbl, cor = self.ESTADOS[n]
+        self.lbl_estado.configure(text=f"Estado {n} — {lbl}", fg=cor)
+        self._carregar_estado(n)
+
+    def _salvar_estado_atual(self):
+        n = self._estado_atual
+        v = self._vars
+        self._estado_vals[n] = {
+            "ancora": v["chk_ancora"].get().strip(),
+            "off_x":  self._int("chk_off_x", 0),
+            "off_y":  self._int("chk_off_y", 0),
+            "larg":   self._int("chk_larg",   4),
+            "alt":    self._int("chk_alt",    5),
+        }
+
+    def _carregar_estado(self, n):
+        if n not in self._estado_vals:
+            return
+        d = self._estado_vals[n]
+        self._vars["chk_ancora"].set(d["ancora"])
+        self._vars["chk_off_x"].set(str(d["off_x"]))
+        self._vars["chk_off_y"].set(str(d["off_y"]))
+        self._vars["chk_larg"].set(str(d["larg"]))
+        self._vars["chk_alt"].set(str(d["alt"]))
+
+    def _int(self, key, fallback=0):
+        try: return int(self._vars[key].get())
+        except: return fallback
+
+    # ── Config ────────────────────────────────────────────────────────
+
+    def _carregar_do_config(self):
+        """Preenche os campos com valores já salvos no JSON."""
+        cfg = _config_carregar()
+        if not cfg.get("calibrado"):
+            # Sem calibração salva — inicializa estado_vals com defaults
+            self._estado_vals = {
+                1: {"ancora": CHK1_ANCORA,  "off_x": CHK1_OFF_X,  "off_y": CHK1_OFF_Y,  "larg": CHK1_LARGURA,  "alt": CHK1_ALTURA},
+                2: {"ancora": CHK2_ANCORA,  "off_x": CHK2_OFF_X,  "off_y": CHK2_OFF_Y,  "larg": CHK2_LARGURA,  "alt": CHK2_ALTURA},
+                3: {"ancora": CHK3_ANCORA,  "off_x": CHK3_OFF_X,  "off_y": CHK3_OFF_Y,  "larg": CHK3_LARGURA,  "alt": CHK3_ALTURA},
+                4: {"ancora": CHK4_ANCORA,  "off_x": CHK4_OFF_X,  "off_y": CHK4_OFF_Y,  "larg": CHK4_LARGURA,  "alt": CHK4_ALTURA},
+            }
+        else:
+            self._estado_vals = {
+                1: {"ancora": cfg.get("chk1_ancora", CHK1_ANCORA), "off_x": cfg.get("chk1_off_x", CHK1_OFF_X), "off_y": cfg.get("chk1_off_y", CHK1_OFF_Y), "larg": cfg.get("chk1_larg", CHK1_LARGURA), "alt": cfg.get("chk1_alt", CHK1_ALTURA)},
+                2: {"ancora": cfg.get("chk2_ancora", CHK2_ANCORA), "off_x": cfg.get("chk2_off_x", CHK2_OFF_X), "off_y": cfg.get("chk2_off_y", CHK2_OFF_Y), "larg": cfg.get("chk2_larg", CHK2_LARGURA), "alt": cfg.get("chk2_alt", CHK2_ALTURA)},
+                3: {"ancora": cfg.get("chk3_ancora", CHK3_ANCORA), "off_x": cfg.get("chk3_off_x", CHK3_OFF_X), "off_y": cfg.get("chk3_off_y", CHK3_OFF_Y), "larg": cfg.get("chk3_larg", CHK3_LARGURA), "alt": cfg.get("chk3_alt", CHK3_ALTURA)},
+                4: {"ancora": cfg.get("chk4_ancora", CHK4_ANCORA), "off_x": cfg.get("chk4_off_x", CHK4_OFF_X), "off_y": cfg.get("chk4_off_y", CHK4_OFF_Y), "larg": cfg.get("chk4_larg", CHK4_LARGURA), "alt": cfg.get("chk4_alt", CHK4_ALTURA)},
+            }
+            self._vars["ass_ancora"].set(cfg.get("ass_ancora", "AE72"))
+            self._vars["ass_off_x"].set(str(cfg.get("ass_off_x", 10)))
+            self._vars["ass_off_y"].set(str(cfg.get("ass_off_y", -5)))
+            self._vars["ass_larg"].set(str(cfg.get("ass_larg", 170)))
+            self._vars["ass_alt"].set(str(cfg.get("ass_alt", 55)))
+
+        # Carregar estado 1 nos campos visíveis
+        self._carregar_estado(1)
+
+    def _salvar(self):
+        """Salva todos os valores calibrados no config JSON e atualiza as globais."""
+        self._salvar_estado_atual()
+        payload = {
+            "calibrado": True,
+            "ass_ancora": self._vars["ass_ancora"].get().strip(),
+            "ass_off_x":  self._int("ass_off_x"),
+            "ass_off_y":  self._int("ass_off_y"),
+            "ass_larg":   self._int("ass_larg"),
+            "ass_alt":    self._int("ass_alt"),
+        }
+        keys = ["ancora", "off_x", "off_y", "larg", "alt"]
+        for n in range(1, 5):
+            d = self._estado_vals.get(n, {})
+            payload[f"chk{n}_ancora"] = d.get("ancora", "")
+            payload[f"chk{n}_off_x"]  = d.get("off_x", 0)
+            payload[f"chk{n}_off_y"]  = d.get("off_y", 0)
+            payload[f"chk{n}_larg"]   = d.get("larg", 4)
+            payload[f"chk{n}_alt"]    = d.get("alt", 5)
+
+        _config_salvar(payload)
+        _carregar_calibracao()  # aplica imediatamente nas globais
+        self.var_status.set("✅ Calibração salva! Próxima geração já usa os novos valores.")
+        self._log("✅ Valores salvos em ~/.bercan_config.json e aplicados.")
+
+    # ── Preview ───────────────────────────────────────────────────────
+
+    def _iniciar_preview(self):
+        memorial = self._vars["memorial"].get().strip()
+        if not memorial or not os.path.exists(memorial):
+            messagebox.showerror("Erro", "Selecione um Memorial válido.", parent=self)
+            return
+        if "PREVIEW_CALIBRADOR" in os.path.basename(memorial):
+            messagebox.showerror("Arquivo inválido",
+                                 "Selecione o memorial ORIGINAL, não o preview.",
+                                 parent=self)
+            return
+
+        self._salvar_estado_atual()
+        self.btn_preview.configure(state="disabled", text="⏳ Gerando preview...")
+        self.var_status.set("Processando...")
+
+        estado   = self.var_estado.get()
+        ass_img  = self._vars["assinatura"].get().strip() or None
+        saida    = str(Path(memorial).parent / "PREVIEW_CALIBRADOR.xlsx")
+
+        threading.Thread(
+            target=self._worker_preview,
+            args=(memorial, ass_img, estado, saida),
+            daemon=True,
+        ).start()
+
+    def _worker_preview(self, memorial, ass_img, estado, saida):
+        import pythoncom, win32com.client, time as _time
+
+        def log(msg):
+            self.after(0, self._log, msg)
+
+        pythoncom.CoInitialize()
+        xl = None; wb = None
+        try:
+            # Copiar template virgem para preview
+            log("• Copiando memorial...")
+            shutil.copy2(memorial, saida)
+
+            log("• Abrindo no Excel...")
+            xl = win32com.client.Dispatch("Excel.Application")
+            try: xl.Visible = False
+            except: pass
+            try: xl.DisplayAlerts = False
+            except: pass
+            wb = xl.Workbooks.Open(os.path.abspath(saida))
+            try: ws = wb.Worksheets("ElemConstrutivos")
+            except: ws = wb.Worksheets(1)
+
+            # Assinatura
+            if ass_img and os.path.exists(ass_img):
+                log("• Inserindo assinatura...")
+                cell = ws.Range(self._vars["ass_ancora"].get().strip())
+                ws.Shapes.AddPicture(
+                    os.path.abspath(ass_img), False, True,
+                    cell.Left + self._int("ass_off_x"),
+                    cell.Top  + self._int("ass_off_y"),
+                    self._int("ass_larg"),
+                    self._int("ass_alt"),
+                )
+
+            # Checkbox do estado atual
+            d = self._estado_vals.get(estado, {})
+            log(f"• Inserindo checkbox estado {estado} ({self.ESTADOS[estado][0]})...")
+            q = _quadrado_preto_temp()
+            try:
+                cell = ws.Range(d.get("ancora", "AM70"))
+                ws.Shapes.AddPicture(
+                    os.path.abspath(q), False, True,
+                    cell.Left + d.get("off_x", 0),
+                    cell.Top  + d.get("off_y", 0),
+                    d.get("larg", 4),
+                    d.get("alt", 5),
+                )
+            finally:
+                try: os.unlink(q)
+                except: pass
+
+            # Exportar PDF
+            wb.Save()
+            pdf = saida.replace(".xlsx", ".pdf")
+            ws.PageSetup.Zoom = False
+            ws.PageSetup.FitToPagesWide = 1
+            ws.PageSetup.FitToPagesTall = 1
+            ws.ExportAsFixedFormat(0, os.path.abspath(pdf), 0, True, False)
+            log(f"✅ PDF gerado: {os.path.basename(pdf)}")
+            log("─" * 40)
+            log(f"Estado calibrado: {self.ESTADOS[estado][0]}")
+            log(f"  ancora={d.get('ancora')} off=({d.get('off_x')},{d.get('off_y')}) "
+                f"tam={d.get('larg')}x{d.get('alt')}")
+
+            try: os.startfile(pdf)
+            except: pass
+
+            self.after(0, self.var_status.set, "✅ Preview gerado — verifique o PDF!")
+
+        except Exception as e:
+            log(f"✗ ERRO: {e}\n{traceback.format_exc()}")
+            self.after(0, self.var_status.set, f"✗ {e}")
+        finally:
+            if wb:
+                try: wb.Close(SaveChanges=False)
+                except: pass
+            if xl:
+                try: xl.Quit()
+                except: pass
+            pythoncom.CoUninitialize()
+            self.after(0, self.btn_preview.configure,
+                       {"state": "normal",
+                        "text": "⚡ GERAR PREVIEW (abre PDF)"})
+
+    def _log(self, msg):
+        self.txt_log.configure(state="normal")
+        self.txt_log.insert("end", msg + "\n")
+        self.txt_log.see("end")
+        self.txt_log.configure(state="disabled")
+
+
+# ============================================================
 # ENTRY POINT
 # ============================================================
 if __name__ == "__main__":
+    _carregar_calibracao()  # aplica config salvo antes de abrir a janela
     App().mainloop()
