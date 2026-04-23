@@ -670,25 +670,6 @@ def _detectar_celulas_azuis_openpyxl(xlsx_path, sheet_name="ElemConstrutivos"):
     return coords
 
 
-def _obter_fator_dpi() -> float:
-    """
-    Retorna fator de correção DPI relativo a 125% (escala de calibração).
-    Se o PC estiver em 125% (mesmo que o de calibração) → fator 1.0 → sem ajuste.
-    Se estiver em 150% → fator 1.2 → offsets aumentam proporcionalmente.
-    Se estiver em 100% → fator 0.8 → offsets diminuem.
-    """
-    try:
-        import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        hdc = ctypes.windll.user32.GetDC(0)
-        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        # Normaliza em relação a 120 DPI (= 125% no Windows)
-        return dpi / 120.0
-    except Exception:
-        return 1.0  # fallback — sem ajuste
-
-
 def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
                                  offset_x_pt=0, offset_y_pt=0,
                                  largura_pt=100, altura_pt=50):
@@ -696,20 +677,18 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
     Insere uma imagem no Excel via win32com Shapes.AddPicture com controle
     preciso de posição e tamanho em pontos.
 
-    Os offsets são calibrados em 100% DPI. Em PCs com escala diferente
-    (125%, 150%), o Excel escala cell.Left/Top automaticamente mas os offsets
-    precisam ser ajustados pelo mesmo fator para manter o alinhamento.
+    IMPORTANTE: cell.Left/Top retornados pelo Excel COM são sempre em pontos
+    do documento (unidade absoluta), independentemente da escala DPI do monitor.
+    Shapes.AddPicture também recebe pontos do documento — sem conversão necessária.
+    Aplicar fator DPI aqui causava deslocamento em PCs com escala diferente da
+    máquina de calibração.
     """
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Imagem não encontrada: {img_path}")
 
-    # Fator DPI: 1.0 em 100%, 1.25 em 125%, 1.5 em 150%
-    # cell.Left/Top já vêm escalados pelo Excel — os offsets precisam acompanhar
-    dpi = _obter_fator_dpi()
-
     cell = ws.Range(ancora_celula)
-    left = cell.Left + (offset_x_pt * dpi)
-    top  = cell.Top  + (offset_y_pt * dpi)
+    left = cell.Left + offset_x_pt
+    top  = cell.Top  + offset_y_pt
 
     # Shapes.AddPicture(Filename, LinkToFile, SaveWithDocument, Left, Top, Width, Height)
     shape = ws.Shapes.AddPicture(
@@ -718,8 +697,8 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
         True,    # SaveWithDocument = True
         left,
         top,
-        largura_pt * dpi,
-        altura_pt  * dpi,
+        largura_pt,
+        altura_pt,
     )
     return shape
 
@@ -1020,6 +999,29 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
             ws = wb.Worksheets("ElemConstrutivos")
         except Exception:
             ws = wb.Worksheets(1)
+
+        # ── LIMPEZA: remover checkboxes de execuções anteriores ──────────────
+        # O template pode ter sido reutilizado ou o arquivo já foi processado
+        # antes. Sem limpeza, cada execução acumula um shape extra, causando
+        # checkboxes deslocados na exportação para PDF.
+        # Critério: shapes pequenos (≤ 10 pt em qualquer dimensão) que não
+        # sejam imagens de assinatura (assinatura tem >50 pt de largura).
+        try:
+            shapes_removidos = 0
+            # Itera de trás pra frente para evitar índice inválido após remoção
+            for i in range(ws.Shapes.Count, 0, -1):
+                sh = ws.Shapes(i)
+                w = sh.Width
+                h = sh.Height
+                # Checkbox: pequeno (≤ 12 pt) e não é a assinatura (>50 pt)
+                if w <= 12 and h <= 12:
+                    sh.Delete()
+                    shapes_removidos += 1
+            if log and shapes_removidos:
+                log(f"  • {shapes_removidos} shape(s) antigo(s) removido(s) antes de inserir")
+        except Exception as e:
+            if log:
+                log(f"  ⚠ Limpeza de shapes falhou (não crítico): {e}")
 
         # Estado 1 ou 2: esgoto
         if esgoto_sim:
