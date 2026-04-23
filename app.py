@@ -2129,9 +2129,25 @@ class JanelaCalibrador(tk.Toplevel):
         body = tk.Frame(self, bg=COR_FUNDO)
         body.pack(fill="both", expand=True, padx=20, pady=8)
 
-        col_esq = tk.Frame(body, bg=COR_FUNDO, width=380)
-        col_esq.pack(side="left", fill="y", padx=(0, 12))
-        col_esq.pack_propagate(False)
+        # Coluna esquerda com scroll — evita corte dos campos inferiores
+        outer_esq = tk.Frame(body, bg=COR_FUNDO, width=390)
+        outer_esq.pack(side="left", fill="y", padx=(0, 12))
+        outer_esq.pack_propagate(False)
+        canvas_esq = tk.Canvas(outer_esq, bg=COR_FUNDO, highlightthickness=0)
+        sb_esq = tk.Scrollbar(outer_esq, orient="vertical", command=canvas_esq.yview)
+        canvas_esq.configure(yscrollcommand=sb_esq.set)
+        sb_esq.pack(side="right", fill="y")
+        canvas_esq.pack(side="left", fill="both", expand=True)
+        col_esq = tk.Frame(canvas_esq, bg=COR_FUNDO)
+        wid_esq = canvas_esq.create_window((0, 0), window=col_esq, anchor="nw")
+        col_esq.bind("<Configure>", lambda e: (
+            canvas_esq.configure(scrollregion=canvas_esq.bbox("all")),
+            canvas_esq.itemconfig(wid_esq, width=canvas_esq.winfo_width()),
+        ))
+        canvas_esq.bind("<MouseWheel>",
+            lambda e: canvas_esq.yview_scroll(int(-1*(e.delta/120)), "units"))
+        col_esq.bind("<MouseWheel>",
+            lambda e: canvas_esq.yview_scroll(int(-1*(e.delta/120)), "units"))
 
         col_dir = tk.Frame(body, bg=COR_FUNDO)
         col_dir.pack(side="left", fill="both", expand=True)
