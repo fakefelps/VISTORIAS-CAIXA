@@ -676,13 +676,24 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
     """
     Insere uma imagem no Excel via win32com Shapes.AddPicture com controle
     preciso de posição e tamanho em pontos. Preserva qualidade total da imagem.
+
+    Normaliza coordenadas pelo fator de zoom/DPI do Excel para funcionar
+    corretamente em monitores com escala diferente de 100% (125%, 150% etc.).
     """
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Imagem não encontrada: {img_path}")
 
+    # cell.Left e cell.Top são retornados pelo Excel já escalados pelo zoom da janela.
+    # Dividindo pelo fator de zoom obtemos as coordenadas em pontos reais,
+    # independente da escala de DPI configurada no Windows/Excel do usuário.
+    try:
+        dpi_factor = ws.Parent.Application.ActiveWindow.Zoom / 100.0
+    except Exception:
+        dpi_factor = 1.0  # fallback seguro — comportamento original
+
     cell = ws.Range(ancora_celula)
-    left = cell.Left + offset_x_pt
-    top = cell.Top + offset_y_pt
+    left = (cell.Left / dpi_factor) + offset_x_pt
+    top  = (cell.Top  / dpi_factor) + offset_y_pt
 
     # Shapes.AddPicture(Filename, LinkToFile, SaveWithDocument, Left, Top, Width, Height)
     shape = ws.Shapes.AddPicture(
