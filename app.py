@@ -251,6 +251,180 @@ def asset(nome: str) -> str:
     return resource_path(os.path.join("assets", nome))
 
 
+# ============================================================
+# HELPERS — DATA
+# ============================================================
+
+def formatar_data_hoje() -> str:
+    """Retorna data atual no formato DD/MM/AAAA."""
+    return datetime.date.today().strftime("%d/%m/%Y")
+
+
+def formatar_data_extenso() -> str:
+    """Retorna data no formato '16 de abril de 2026'."""
+    meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+             "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+    hoje = datetime.date.today()
+    return f"{hoje.day} de {meses[hoje.month - 1]} de {hoje.year}"
+
+
+# ============================================================
+# HELPERS — WORD (python-docx)
+# ============================================================
+
+def _preto_run(run):
+    """Força a cor de um run para preto (RGB 0,0,0)."""
+    run.font.color.rgb = RGBColor(0, 0, 0)
+
+
+def _preto_paragrafo(para):
+    """Força todos os runs do parágrafo para preto."""
+    for run in para.runs:
+        _preto_run(run)
+
+
+def _sub_paragrafo(para, placeholder, valor):
+    """
+    Substitui placeholder em um parágrafo, consolidando runs fragmentados.
+    O Word quebra texto em múltiplos runs por formatação (ex: '{6}' pode estar em
+    runs separados: '{', '6', '}'). Reconstruímos o texto, substituímos e
+    reescrevemos tudo no primeiro run, zerando os demais.
+    """
+    if placeholder not in para.text:
+        return False
+    texto_completo = "".join(r.text for r in para.runs)
+    if placeholder not in texto_completo:
+        return False
+    texto_novo = texto_completo.replace(placeholder, str(valor))
+    if para.runs:
+        para.runs[0].text = texto_novo
+        _preto_run(para.runs[0])
+        for run in para.runs[1:]:
+            run.text = ""
+    return True
+
+
+def _detectar_paragrafo_assinatura(doc):
+    """
+    Detecta o índice do parágrafo de assinatura no template Word.
+    Procura o parágrafo que contém apenas underscores (____).
+    Fallback: penúltimo parágrafo antes de 'RT:'.
+    """
+    paras = doc.paragraphs
+    for i, p in enumerate(paras):
+        txt = p.text.strip()
+        if txt and all(c in ('_', ' ') for c in txt) and len(txt) >= 5:
+            return i
+    for i, p in enumerate(paras):
+        if p.text.strip().startswith("RT:"):
+            return max(0, i - 2)
+    return max(0, len(paras) - 2)
+
+
+def _inserir_assinatura_word(doc, img_path, linha_idx=None, log=None):
+    """
+    Insere a assinatura como imagem FLUTUANTE (behind text) no Word.
+    Ancora dinamicamente no parágrafo com ____ (linha de assinatura).
+    """
+    if not os.path.exists(img_path):
+        if log:
+            log(f"⚠ Assinatura não encontrada: {img_path}")
+        return
+
+    idx = _detectar_paragrafo_assinatura(doc)
+    if log:
+        log(f"  • Assinatura ancorada no parágrafo [{idx}]: {repr(doc.paragraphs[idx].text[:40])}")
+
+    target = doc.paragraphs[idx]
+    run = target.add_run()
+    run.add_picture(img_path, width=ASSINATURA_WORD_LARGURA)
+
+    drawing = run._r.find(qn("w:drawing"))
+    if drawing is None:
+        return
+    inline = drawing.find(qn("wp:inline"))
+    if inline is None:
+        return
+
+    graphic_elems = [c for c in inline if "graphic" in c.tag]
+    if not graphic_elems:
+        return
+    graphic_el = graphic_elems[0]
+
+    extent_el = inline.find(qn("wp:extent"))
+    cx = extent_el.get("cx") if extent_el is not None else "1800000"
+    cy = extent_el.get("cy") if extent_el is not None else "600000"
+
+    anchor_xml = f'''<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        distT="0" distB="0" distL="0" distR="0"
+        simplePos="0" relativeHeight="251658240"
+        behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">
+        <wp:simplePos x="0" y="0"/>
+        <wp:positionH relativeFrom="column">
+            <wp:posOffset>0</wp:posOffset>
+        </wp:positionH>
+        <wp:positionV relativeFrom="paragraph">
+            <wp:posOffset>-457200</wp:posOffset>
+        </wp:positionV>
+        <wp:extent cx="{cx}" cy="{cy}"/>
+        <wp:effectExtent l="0" t="0" r="0" b="0"/>
+        <wp:wrapNone/>
+        <wp:docPr id="1" name="Assinatura"/>
+        <wp:cNvGraphicFramePr/>
+    </wp:anchor>'''
+
+    anchor = etree.fromstring(anchor_xml)
+    anchor.append(deepcopy(graphic_el))
+    drawing.remove(inline)
+    drawing.append(anchor)
+
+
+def preencher_word(esgoto_sim, saida_path, dados, num_casa, log=None):
+    """Preenche o template Word (FOSSA ou ESGOTO) e salva como .docx."""
+    tpl_nome = TEMPLATE_ESGOTO if esgoto_sim else TEMPLATE_FOSSA
+    tpl_path = asset(tpl_nome)
+    linha_ass = ESGOTO_LINHA_ASS if esgoto_sim else FOSSA_LINHA_ASS
+
+    if not os.path.exists(tpl_path):
+        raise FileNotFoundError(f"Template Word não encontrado: {tpl_path}")
+
+    doc = Document(tpl_path)
+
+    subs = {
+        "{1}": dados.get("art", ""),
+        "{2}": dados.get("crea", ""),
+        "{5}": dados.get("logradouro", ""),
+        "{6}": dados.get("quadra_lote", ""),
+        "{7}": dados.get("bairro", ""),
+        "{9}": f"CASA {num_casa}",
+        "{10}": dados.get("cidade", ""),
+        "{11}": dados.get("uf", ""),
+        "{ENGENHEIRO SELECIONADO}": dados.get("engenheiro_nome", ""),
+        "{dia/mes/ano}": formatar_data_hoje(),
+    }
+
+    for para in doc.paragraphs:
+        for ph, val in subs.items():
+            _sub_paragrafo(para, ph, val)
+        _preto_paragrafo(para)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for ph, val in subs.items():
+                        _sub_paragrafo(para, ph, val)
+                    _preto_paragrafo(para)
+
+    _inserir_assinatura_word(doc, dados["assinatura_path"], linha_ass, log)
+
+    doc.save(saida_path)
+    if log:
+        log(f"  ✓ Word gerado: {os.path.basename(saida_path)}")
+
+
 def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
     """
     Marca os checkboxes variáveis do Memorial via XML direto no .xlsx.
