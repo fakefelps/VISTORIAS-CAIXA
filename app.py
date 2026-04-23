@@ -881,7 +881,7 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
     xl = None
     wb = None
     try:
-        xl = win32com.client.Dispatch("Excel.Application")
+        xl = win32com.client.DispatchEx("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -994,7 +994,7 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
     xl = None
     wb = None
     try:
-        xl = win32com.client.Dispatch("Excel.Application")
+        xl = win32com.client.DispatchEx("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -1043,7 +1043,7 @@ def _excel_para_pdf(xlsx_path, pdf_path, log=None):
     xl = None
     wb = None
     try:
-        xl = win32com.client.Dispatch("Excel.Application")
+        xl = win32com.client.DispatchEx("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -1081,7 +1081,7 @@ def _word_para_pdf(docx_path, pdf_path, log=None):
     word = None
     doc = None
     try:
-        word = win32com.client.Dispatch("Word.Application")
+        word = win32com.client.DispatchEx("Word.Application")
         try: word.Visible = False
         except Exception: pass
         try: word.DisplayAlerts = False
