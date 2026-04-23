@@ -683,17 +683,12 @@ def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Imagem não encontrada: {img_path}")
 
-    # cell.Left e cell.Top são retornados pelo Excel já escalados pelo zoom da janela.
-    # Dividindo pelo fator de zoom obtemos as coordenadas em pontos reais,
-    # independente da escala de DPI configurada no Windows/Excel do usuário.
-    try:
-        dpi_factor = ws.Parent.Application.ActiveWindow.Zoom / 100.0
-    except Exception:
-        dpi_factor = 1.0  # fallback seguro — comportamento original
-
+    # cell.Left e cell.Top são em pontos reais no Excel COM — não sofrem escala de DPI.
+    # O deslocamento em outros PCs é causado apenas pelos offsets calibrados.
+    # Não dividir por zoom: ActiveWindow pode não existir em instâncias headless.
     cell = ws.Range(ancora_celula)
-    left = (cell.Left / dpi_factor) + offset_x_pt
-    top  = (cell.Top  / dpi_factor) + offset_y_pt
+    left = cell.Left + offset_x_pt
+    top  = cell.Top  + offset_y_pt
 
     # Shapes.AddPicture(Filename, LinkToFile, SaveWithDocument, Left, Top, Width, Height)
     shape = ws.Shapes.AddPicture(
@@ -881,7 +876,7 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
     xl = None
     wb = None
     try:
-        xl = win32com.client.DispatchEx("Excel.Application")
+        xl = win32com.client.Dispatch("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -994,7 +989,7 @@ def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
     xl = None
     wb = None
     try:
-        xl = win32com.client.DispatchEx("Excel.Application")
+        xl = win32com.client.Dispatch("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -1043,7 +1038,7 @@ def _excel_para_pdf(xlsx_path, pdf_path, log=None):
     xl = None
     wb = None
     try:
-        xl = win32com.client.DispatchEx("Excel.Application")
+        xl = win32com.client.Dispatch("Excel.Application")
         try: xl.Visible = False
         except Exception: pass
         try: xl.DisplayAlerts = False
@@ -1081,7 +1076,7 @@ def _word_para_pdf(docx_path, pdf_path, log=None):
     word = None
     doc = None
     try:
-        word = win32com.client.DispatchEx("Word.Application")
+        word = win32com.client.Dispatch("Word.Application")
         try: word.Visible = False
         except Exception: pass
         try: word.DisplayAlerts = False
