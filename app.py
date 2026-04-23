@@ -153,13 +153,6 @@ CHK4_OFF_Y   = 8
 CHK4_LARGURA = 4
 CHK4_ALTURA  = 5
 
-# Loteamentos — fixo NSA, sempre inserido
-CHK_LOT_NSA_ANCORA  = "AS64"
-CHK_LOT_NSA_OFF_X   = 12
-CHK_LOT_NSA_OFF_Y   = 8
-CHK_LOT_NSA_LARGURA = 4
-CHK_LOT_NSA_ALTURA  = 5
-
 # Estado de condomínios — atualizado pela UI antes do processamento
 GEMINADAS_CONDOMINIOS = "nao_se_aplica"
 
@@ -573,12 +566,6 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log
                 _inserir_checkbox_img(ws, CHK4_ANCORA, CHK4_OFF_X, CHK4_OFF_Y,
                                       CHK4_LARGURA, CHK4_ALTURA, q)
                 if log: log(f"  ✓ Checkbox condomínio NSA ({CHK4_ANCORA})")
-
-            # Loteamentos — sempre NSA (fixo)
-            _inserir_checkbox_img(ws, CHK_LOT_NSA_ANCORA, CHK_LOT_NSA_OFF_X,
-                                  CHK_LOT_NSA_OFF_Y, CHK_LOT_NSA_LARGURA,
-                                  CHK_LOT_NSA_ALTURA, q)
-            if log: log(f"  ✓ Checkbox loteamento NSA ({CHK_LOT_NSA_ANCORA})")
 
         except Exception as e:
             if log: log(f"  ⚠ Falha ao inserir checkboxes: {e}")
@@ -2005,8 +1992,6 @@ def _carregar_calibracao():
     global CHK2_ANCORA, CHK2_OFF_X, CHK2_OFF_Y, CHK2_LARGURA, CHK2_ALTURA
     global CHK3_ANCORA, CHK3_OFF_X, CHK3_OFF_Y, CHK3_LARGURA, CHK3_ALTURA
     global CHK4_ANCORA, CHK4_OFF_X, CHK4_OFF_Y, CHK4_LARGURA, CHK4_ALTURA
-    global CHK_LOT_NSA_ANCORA, CHK_LOT_NSA_OFF_X, CHK_LOT_NSA_OFF_Y
-    global CHK_LOT_NSA_LARGURA, CHK_LOT_NSA_ALTURA
     global ASSINATURA_EXCEL_ANCORA, ASSINATURA_EXCEL_OFFSET_X_PT
     global ASSINATURA_EXCEL_OFFSET_Y_PT, ASSINATURA_EXCEL_LARGURA_PT
     global ASSINATURA_EXCEL_ALTURA_PT
@@ -2037,12 +2022,6 @@ def _carregar_calibracao():
     CHK4_OFF_Y   = _i("chk4_off_y",   CHK4_OFF_Y)
     CHK4_LARGURA = _i("chk4_larg",    CHK4_LARGURA)
     CHK4_ALTURA  = _i("chk4_alt",     CHK4_ALTURA)
-
-    CHK_LOT_NSA_ANCORA  = _s("chk_lot_ancora", CHK_LOT_NSA_ANCORA)
-    CHK_LOT_NSA_OFF_X   = _i("chk_lot_off_x",  CHK_LOT_NSA_OFF_X)
-    CHK_LOT_NSA_OFF_Y   = _i("chk_lot_off_y",  CHK_LOT_NSA_OFF_Y)
-    CHK_LOT_NSA_LARGURA = _i("chk_lot_larg",   CHK_LOT_NSA_LARGURA)
-    CHK_LOT_NSA_ALTURA  = _i("chk_lot_alt",    CHK_LOT_NSA_ALTURA)
 
     ASSINATURA_EXCEL_ANCORA      = _s("ass_ancora",  ASSINATURA_EXCEL_ANCORA)
     ASSINATURA_EXCEL_OFFSET_X_PT = _i("ass_off_x",   ASSINATURA_EXCEL_OFFSET_X_PT)
