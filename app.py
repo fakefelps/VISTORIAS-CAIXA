@@ -122,51 +122,28 @@ TEMPLATE_ESGOTO = "TEMPLETE PARA ESGOTO.docx"
 FOSSA_LINHA_ASS = 36
 ESGOTO_LINHA_ASS = 41
 
-# ----- Checkboxes como imagens PNG (NOVO v4) -----
-# NOTA: os arquivos no repositório têm extensão dupla (.png.jpeg).
-# A função asset_checkbox() abaixo resolve automaticamente a extensão correta.
-CHECKBOX_COM_ESGOTO_IMG = "CHECKBOX_COM_ESGOTO.png"
-CHECKBOX_SEM_ESGOTO_IMG = "CHECKBOX_SEM_ESGOTO.png"
+# ----- Template Excel (embutido em assets — NÃO selecionado pelo usuário) -----
+# Cada execução parte de uma cópia limpa do template virgem.
+# Para atualizar o template: substituir assets/MEMORIAL_TEMPLATE.xlsx e rebuild.
+TEMPLATE_EXCEL = "MEMORIAL_TEMPLATE.xlsx"
 
-# ----- Checkboxes imagem — valores calibrados 17/04/2026 -----
-# 4 estados independentes: ancora + offset + tamanho
-# Estado 1: Esgoto SIM
-CHK1_ANCORA  = "AM70"
-CHK1_OFF_X   = 10
-CHK1_OFF_Y   = 3
-CHK1_LARGURA = 4
-CHK1_ALTURA  = 5
-# Estado 2: Esgoto NÃO
-CHK2_ANCORA  = "AP70"
-CHK2_OFF_X   = 11
-CHK2_OFF_Y   = 3
-CHK2_LARGURA = 4
-CHK2_ALTURA  = 5
-# Estado 3: Condomínio SIM
-CHK3_ANCORA  = "AM65"
-CHK3_OFF_X   = 10
-CHK3_OFF_Y   = 8
-CHK3_LARGURA = 4
-CHK3_ALTURA  = 5
-# Estado 4: Condomínio Não se aplica
-CHK4_ANCORA  = "AS65"
-CHK4_OFF_X   = 12
-CHK4_OFF_Y   = 8
-CHK4_LARGURA = 4
-CHK4_ALTURA  = 5
-# Fallback de ancora para detecção automática
-CHECKBOX_ANCORA_FALLBACK = "AM70"
+# ----- Checkboxes — shapes nativos do template (método XML/cor) -----
+# Pintar solidFill=000000 = marcado | remover solidFill = desmarcado (vazio)
+# Confirmados via inspeção do drawing1.xml do MEMORIAL_TEMPLATE.xlsx.
+#
+# Esgoto (linha 70) — variável, controlado pelo app:
+SHAPE_ESGOTO_SIM = "QO012,12.L0C0;L0C-34^"
+SHAPE_ESGOTO_NAO = "QO012,22.L0C0;L0C-37^"
+#
+# Loteamentos (linha 64) — FIXO = Não se aplica (já marcado no template virgem).
+# O app NÃO toca nesses shapes.
+#
+# Condomínios (linha 65) — variável, controlado pelo app:
+SHAPE_COND_SIM = "QOCN,13.L0C-32;L0C-34^"
+SHAPE_COND_NAO = "QOCN,23.L0C-35;L0C-37^"
+SHAPE_COND_NSA = "QOCN,33.L0C-38;L0C-40^"
 
-# ----- Texto usado para localizar a linha do esgoto automaticamente -----
-# A detecção varre a planilha procurando este fragmento (case-insensitive).
-# Se o texto mudar na nova versão do memorial, atualizar apenas aqui.
-TEXTO_ITEM_ESGOTO = "sistema público de coleta de esgoto sanitário"
-
-# Checkboxes de casas geminadas — opções: "sim", "nao", "nao_se_aplica"
-# Shapes confirmados via drawing1.xml:
-#   Loteamentos  linha 64: SIM=QOCI,13... | NAO=QOCI,23... | NSA=QOCI,33...
-#   Condomínios  linha 65: SIM=QOCN,13... | NAO=QOCN,23... | NSA=QOCN,33...
-GEMINADAS_LOTEAMENTOS = "nao_se_aplica"
+# Estado de condomínios — atualizado pela UI antes do processamento
 GEMINADAS_CONDOMINIOS = "nao_se_aplica"
 
 
@@ -274,547 +251,84 @@ def asset(nome: str) -> str:
     return resource_path(os.path.join("assets", nome))
 
 
-def asset_checkbox(nome_base: str) -> str:
+def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
     """
-    Retorna o caminho do arquivo de checkbox, tolerando extensão dupla.
-    O GitHub às vezes sobe arquivos como 'CHECKBOX_X.png.jpeg'.
-    Testa extensões na ordem: .png → .jpeg → .png.jpeg → .jpg
+    Marca os checkboxes variáveis do Memorial via XML direto no .xlsx.
+
+    Método: pintar solidFill do shape nativo com 000000 (marcado) ou
+    remover o solidFill (desmarcado/vazio). Sem imagens sobrepostas,
+    sem dependência de DPI, sem variação entre PCs.
+
+    Shapes controlados:
+      - Esgoto SIM/NÃO  (linha 70): SHAPE_ESGOTO_SIM / SHAPE_ESGOTO_NAO
+      - Condomínios      (linha 65): SHAPE_COND_SIM / SHAPE_COND_NAO / SHAPE_COND_NSA
+      - Loteamentos      (linha 64): NÃO TOCADO — fixo no template virgem
     """
-    candidatos = [
-        asset(nome_base),                          # ex: CHECKBOX_COM_ESGOTO.png
-        asset(nome_base + ".jpeg"),                # ex: CHECKBOX_COM_ESGOTO.png.jpeg
-        asset(nome_base.replace(".png", ".jpeg")), # ex: CHECKBOX_COM_ESGOTO.jpeg
-        asset(nome_base.replace(".png", ".jpg")),  # ex: CHECKBOX_COM_ESGOTO.jpg
-    ]
-    for c in candidatos:
-        if os.path.exists(c):
-            return c
-    # Retorna o original mesmo sem existir (vai gerar erro descritivo depois)
-    return asset(nome_base)
+    import tempfile, shutil, zipfile
+    from lxml import etree
 
-
-
-def _detectar_posicao_esgoto(xlsx_path, log=None):
-    """
-    Detecta automaticamente a posição dos checkboxes de esgoto no memorial.
-
-    Estratégia:
-      1. Varre ElemConstrutivos procurando a célula com TEXTO_ITEM_ESGOTO.
-      2. Na linha encontrada, identifica colunas "Sim" e "Não".
-      3. No drawing XML, encontra os shapes ancorados nessa linha/coluna.
-
-    Retorna dict:
-      { "linha", "ancora_sim", "ancora_nao", "shape_sim", "shape_nao" }
-    Ou None se não encontrar (app usa CHECKBOX_ANCORA_FALLBACK).
-    """
-    from openpyxl import load_workbook
-    from openpyxl.utils import get_column_letter
-
-    try:
-        wb = load_workbook(xlsx_path, data_only=False, read_only=True)
-        sheet_name = "ElemConstrutivos" if "ElemConstrutivos" in wb.sheetnames else wb.sheetnames[0]
-        ws = wb[sheet_name]
-
-        # Passo 1: encontrar linha pelo texto
-        linha_esgoto = None
-        col_sim = None
-        col_nao = None
-
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value and isinstance(cell.value, str):
-                    if TEXTO_ITEM_ESGOTO in cell.value.lower():
-                        linha_esgoto = cell.row
-                        break
-            if linha_esgoto:
-                break
-
-        if not linha_esgoto:
-            if log:
-                log(f"  \u26a0 Texto nao encontrado no memorial \u2014 usando fallback")
-            wb.close()
-            return None
-
-        # Passo 2: encontrar colunas SIM e NAO na linha detectada
-        for cell in ws[linha_esgoto]:
-            if cell.value and isinstance(cell.value, str):
-                v = cell.value.strip().upper()
-                if v == "SIM" and col_sim is None:
-                    col_sim = cell.column
-                elif v in ("N\u00c3O", "NAO") and col_nao is None:
-                    col_nao = cell.column
-
-        wb.close()
-
-        if not col_sim:
-            if log:
-                log("  \u26a0 Coluna SIM nao encontrada \u2014 usando fallback")
-            return None
-
-        ancora_sim = f"{get_column_letter(col_sim)}{linha_esgoto}"
-        ancora_nao = f"{get_column_letter(col_nao)}{linha_esgoto}" if col_nao else ancora_sim
-
-        if log:
-            log(f"  \u2713 Esgoto detectado: linha {linha_esgoto} | SIM={ancora_sim} NAO={ancora_nao}")
-
-        # Passo 3: localizar shapes no drawing XML
-        shape_sim = None
-        shape_nao = None
-
-        with zipfile.ZipFile(xlsx_path) as z:
-            drawings = [f for f in z.namelist()
-                        if f.startswith("xl/drawings/drawing") and f.endswith(".xml")]
-            for drw in drawings:
-                root = etree.fromstring(z.read(drw))
-                ns_xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
-                ns_map = {"xdr": ns_xdr}
-
-                for anchor in root.findall("xdr:twoCellAnchor", ns_map):
-                    sp = anchor.find("xdr:sp", ns_map)
-                    if sp is None:
-                        continue
-                    frm = anchor.find("xdr:from", ns_map)
-                    if frm is None:
-                        continue
-                    row_xml = int(frm.find("xdr:row", ns_map).text) + 1
-                    col_xml = int(frm.find("xdr:col", ns_map).text) + 1
-                    if row_xml != linha_esgoto:
-                        continue
-                    cnv = sp.find(f".//{{{ns_xdr}}}cNvPr")
-                    nome = cnv.get("name", "") if cnv is not None else ""
-                    if col_xml == col_sim:
-                        shape_sim = nome
-                    elif col_nao and col_xml == col_nao:
-                        shape_nao = nome
-
-        if log:
-            log(f"  \u2713 Shapes: SIM='{shape_sim}' NAO='{shape_nao}'")
-
-        return {
-            "linha": linha_esgoto,
-            "ancora_sim": ancora_sim,
-            "ancora_nao": ancora_nao,
-            "shape_sim": shape_sim,
-            "shape_nao": shape_nao,
-        }
-
-    except Exception as e:
-        if log:
-            log(f"  \u26a0 Deteccao automatica falhou ({e}) \u2014 usando fallback")
-        return None
-
-
-def formatar_data_hoje() -> str:
-    """Retorna data atual no formato DD/MM/AAAA."""
-    return datetime.date.today().strftime("%d/%m/%Y")
-
-
-def formatar_data_extenso() -> str:
-    """Retorna data no formato '16 de abril de 2026'."""
-    meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
-             "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
-    hoje = datetime.date.today()
-    return f"{hoje.day} de {meses[hoje.month - 1]} de {hoje.year}"
-
-
-# ============================================================
-# HELPERS — WORD (python-docx)
-# ============================================================
-
-def _preto_run(run):
-    """Força a cor de um run para preto (RGB 0,0,0)."""
-    run.font.color.rgb = RGBColor(0, 0, 0)
-
-
-def _preto_paragrafo(para):
-    """Força todos os runs do parágrafo para preto."""
-    for run in para.runs:
-        _preto_run(run)
-
-
-def _sub_paragrafo(para, placeholder, valor):
-    """
-    Substitui placeholder em um parágrafo, consolidando runs fragmentados.
-    O Word quebra texto em múltiplos runs por formatação (ex: '{6}' pode estar em
-    runs separados: '{', '6', '}'). Reconstruímos o texto, substituímos e
-    reescrevemos tudo no primeiro run, zerando os demais.
-    """
-    if placeholder not in para.text:
-        return False
-
-    # Texto completo do parágrafo
-    texto_completo = "".join(r.text for r in para.runs)
-    if placeholder not in texto_completo:
-        return False
-
-    texto_novo = texto_completo.replace(placeholder, str(valor))
-
-    # Reescreve tudo no primeiro run (preservando formatação dele)
-    if para.runs:
-        para.runs[0].text = texto_novo
-        _preto_run(para.runs[0])
-        # Zera os demais runs
-        for run in para.runs[1:]:
-            run.text = ""
-    return True
-
-
-def _detectar_paragrafo_assinatura(doc):
-    """
-    Detecta o índice do parágrafo de assinatura no template Word.
-    Estratégia: procura o parágrafo que contém apenas underscores (____),
-    que é a linha de assinatura em ambos os templates (FOSSA e ESGOTO).
-    Fallback: usa o penúltimo parágrafo antes de "RT:".
-    Retorna o índice do parágrafo encontrado.
-    """
-    paras = doc.paragraphs
-    # Passo 1: procurar linha de underscores
-    for i, p in enumerate(paras):
-        txt = p.text.strip()
-        if txt and all(c in ('_', ' ') for c in txt) and len(txt) >= 5:
-            return i
-
-    # Passo 2: procurar parágrafo com "RT:" e voltar 2 posições
-    for i, p in enumerate(paras):
-        if p.text.strip().startswith("RT:"):
-            return max(0, i - 2)
-
-    # Fallback: penúltimo parágrafo
-    return max(0, len(paras) - 2)
-
-
-def _inserir_assinatura_word(doc, img_path, linha_idx=None, log=None):
-    """
-    Insere a assinatura como imagem FLUTUANTE (behind text) no Word.
-    Ancora dinamicamente no parágrafo com ____ (linha de assinatura).
-    linha_idx ignorado — mantido apenas por compatibilidade.
-    """
-    if not os.path.exists(img_path):
-        if log:
-            log(f"⚠ Assinatura não encontrada: {img_path}")
-        return
-
-    idx = _detectar_paragrafo_assinatura(doc)
-    if log:
-        log(f"  • Assinatura ancorada no parágrafo [{idx}]: {repr(doc.paragraphs[idx].text[:40])}")
-
-    target = doc.paragraphs[idx]
-    run = target.add_run()
-    run.add_picture(img_path, width=ASSINATURA_WORD_LARGURA)
-
-    # Converter inline → anchor (flutuante behind text)
-    drawing = run._r.find(qn("w:drawing"))
-    if drawing is None:
-        return
-
-    inline = drawing.find(qn("wp:inline"))
-    if inline is None:
-        return  # já está como anchor
-
-    # Copiar o elemento <a:graphic> do inline
-    graphic_elems = [c for c in inline if "graphic" in c.tag]
-    if not graphic_elems:
-        return
-    graphic_el = graphic_elems[0]
-
-    # Extent (dimensões) do inline
-    extent_el = inline.find(qn("wp:extent"))
-    cx = extent_el.get("cx") if extent_el is not None else "1800000"
-    cy = extent_el.get("cy") if extent_el is not None else "600000"
-
-    anchor_xml = f'''<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        distT="0" distB="0" distL="0" distR="0"
-        simplePos="0" relativeHeight="251658240"
-        behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">
-        <wp:simplePos x="0" y="0"/>
-        <wp:positionH relativeFrom="column">
-            <wp:posOffset>0</wp:posOffset>
-        </wp:positionH>
-        <wp:positionV relativeFrom="paragraph">
-            <wp:posOffset>-457200</wp:posOffset>
-        </wp:positionV>
-        <wp:extent cx="{cx}" cy="{cy}"/>
-        <wp:effectExtent l="0" t="0" r="0" b="0"/>
-        <wp:wrapNone/>
-        <wp:docPr id="1" name="Assinatura"/>
-        <wp:cNvGraphicFramePr/>
-    </wp:anchor>'''
-
-    anchor = etree.fromstring(anchor_xml)
-    anchor.append(deepcopy(graphic_el))
-    drawing.remove(inline)
-    drawing.append(anchor)
-
-
-def preencher_word(esgoto_sim, saida_path, dados, num_casa, log=None):
-    """Preenche o template Word (FOSSA ou ESGOTO) e salva como .docx."""
-    tpl_nome = TEMPLATE_ESGOTO if esgoto_sim else TEMPLATE_FOSSA
-    tpl_path = asset(tpl_nome)
-    linha_ass = ESGOTO_LINHA_ASS if esgoto_sim else FOSSA_LINHA_ASS
-
-    if not os.path.exists(tpl_path):
-        raise FileNotFoundError(f"Template Word não encontrado: {tpl_path}")
-
-    doc = Document(tpl_path)
-
-    subs = {
-        "{1}": dados.get("art", ""),
-        "{2}": dados.get("crea", ""),
-        "{5}": dados.get("logradouro", ""),
-        "{6}": dados.get("quadra_lote", ""),
-        "{7}": dados.get("bairro", ""),
-        "{9}": f"CASA {num_casa}",
-        "{10}": dados.get("cidade", ""),
-        "{11}": dados.get("uf", ""),
-        "{ENGENHEIRO SELECIONADO}": dados.get("engenheiro_nome", ""),
-        "{dia/mes/ano}": formatar_data_hoje(),
+    # Mapa shape → deve ficar marcado (True) ou desmarcado (False)
+    mapa = {
+        SHAPE_ESGOTO_SIM: esgoto_sim,
+        SHAPE_ESGOTO_NAO: not esgoto_sim,
+        SHAPE_COND_SIM:   GEMINADAS_CONDOMINIOS == "sim",
+        SHAPE_COND_NAO:   GEMINADAS_CONDOMINIOS == "nao",
+        SHAPE_COND_NSA:   GEMINADAS_CONDOMINIOS == "nao_se_aplica",
     }
 
-    # Substituir em parágrafos
-    for para in doc.paragraphs:
-        for ph, val in subs.items():
-            _sub_paragrafo(para, ph, val)
-        _preto_paragrafo(para)
-
-    # Substituir em tabelas também (caso os placeholders estejam em células)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    for ph, val in subs.items():
-                        _sub_paragrafo(para, ph, val)
-                    _preto_paragrafo(para)
-
-    # Inserir assinatura
-    _inserir_assinatura_word(doc, dados["assinatura_path"], linha_ass, log)
-
-    doc.save(saida_path)
-    if log:
-        log(f"  ✓ Word gerado: {os.path.basename(saida_path)}")
-
-
-# ============================================================
-# HELPERS — EXCEL (win32com)
-# ============================================================
-
-def _safe_rgb_to_hex(color_obj):
-    """
-    Converte objeto de cor do openpyxl para hex string, tolerante a float/tint.
-    Corrige o bug 'unsupported operand type(s) for &: float and int'.
-    """
-    if color_obj is None:
-        return None
     try:
-        rgb = color_obj.rgb
-        if rgb is None:
-            return None
-        # rgb pode vir como string 'FF1E2A3A' ou como int/float
-        if isinstance(rgb, (int, float)):
-            # Converter float para int antes de qualquer operação bitwise
-            rgb_int = int(rgb) & 0xFFFFFF
-            return f"{rgb_int:06X}"
-        if isinstance(rgb, str):
-            # Remove canal alpha se presente (primeiros 2 chars)
-            s = rgb.upper()
-            if len(s) == 8:
-                s = s[2:]
-            return s
-        return None
-    except Exception:
-        return None
-
-
-def _celula_tem_fundo_azul_caixa(cell):
-    """
-    Detecta se uma célula tem fundo azul (padrão CAIXA) no Modo Não Mapeado.
-    Usa conversão segura que não falha com cores em formato float/tint.
-    """
-    try:
-        fill = cell.fill
-        if fill is None or fill.fgColor is None:
-            return False
-        hex_cor = _safe_rgb_to_hex(fill.fgColor)
-        if not hex_cor:
-            return False
-        # Azul CAIXA é tipicamente #DCE6F1 ou variações claras
-        # Heurística: R < G < B e diferença B-R > 15
-        try:
-            r = int(hex_cor[0:2], 16)
-            g = int(hex_cor[2:4], 16)
-            b = int(hex_cor[4:6], 16)
-        except ValueError:
-            return False
-        return (b > r + 10) and (b > 200) and (r < 240)
-    except Exception:
-        return False
-
-
-def _detectar_celulas_azuis_openpyxl(xlsx_path, sheet_name="ElemConstrutivos"):
-    """
-    Percorre o .xlsx com openpyxl e retorna lista de coordenadas com fundo azul.
-    Usado no Modo Não Mapeado.
-    """
-    from openpyxl import load_workbook
-    wb = load_workbook(xlsx_path, data_only=False)
-    if sheet_name not in wb.sheetnames:
-        return []
-    ws = wb[sheet_name]
-    coords = []
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value is None and _celula_tem_fundo_azul_caixa(cell):
-                coords.append(cell.coordinate)
-    wb.close()
-    return coords
-
-
-def _inserir_imagem_excel_win32(ws, img_path, ancora_celula,
-                                 offset_x_pt=0, offset_y_pt=0,
-                                 largura_pt=100, altura_pt=50):
-    """
-    Insere uma imagem no Excel via win32com Shapes.AddPicture com controle
-    preciso de posição e tamanho em pontos.
-
-    IMPORTANTE: cell.Left/Top retornados pelo Excel COM são sempre em pontos
-    do documento (unidade absoluta), independentemente da escala DPI do monitor.
-    Shapes.AddPicture também recebe pontos do documento — sem conversão necessária.
-    Aplicar fator DPI aqui causava deslocamento em PCs com escala diferente da
-    máquina de calibração.
-    """
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"Imagem não encontrada: {img_path}")
-
-    cell = ws.Range(ancora_celula)
-    left = cell.Left + offset_x_pt
-    top  = cell.Top  + offset_y_pt
-
-    # Shapes.AddPicture(Filename, LinkToFile, SaveWithDocument, Left, Top, Width, Height)
-    shape = ws.Shapes.AddPicture(
-        os.path.abspath(img_path),
-        False,   # LinkToFile = False (imagem embutida)
-        True,    # SaveWithDocument = True
-        left,
-        top,
-        largura_pt,
-        altura_pt,
-    )
-    return shape
-
-
-def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None,
-                               shape_sim=None, shape_nao=None):
-    """
-    Marca os checkboxes nativos do Excel manipulando diretamente o XML dos shapes.
-    Usa lxml (preserva namespaces) para evitar corrupção do arquivo.
-
-    shape_sim / shape_nao: nomes detectados automaticamente por
-    _detectar_posicao_esgoto(). Se None, busca qualquer shape na linha
-    do esgoto que não seja imagem (pic).
-
-    Retorna True se conseguiu marcar com sucesso, False caso contrário.
-    """
-    import tempfile
-
-    try:
-        # .xlsx é um ZIP — vamos abrir, modificar drawing1.xml, fechar
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
         os.close(tmp_fd)
         shutil.copy2(xlsx_path, tmp_path)
 
-        shapes_encontrados = 0
+        shapes_ok = 0
 
-        with zipfile.ZipFile(tmp_path, "r") as zi, \
-             zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
+        with zipfile.ZipFile(tmp_path, "r") as zi,              zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
 
             for item in zi.infolist():
                 data = zi.read(item.filename)
 
-                # Procuramos em todos os drawing*.xml (pode haver mais de um)
-                if item.filename.startswith("xl/drawings/drawing") and \
-                   item.filename.endswith(".xml"):
+                if item.filename.startswith("xl/drawings/drawing") and                    item.filename.endswith(".xml"):
                     try:
                         root = etree.fromstring(data)
+                        ns_xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+                        ns_a   = "http://schemas.openxmlformats.org/drawingml/2006/main"
+                        nsmap  = {"xdr": ns_xdr, "a": ns_a}
 
-                        # Mapear namespaces para busca
-                        nsmap = {
-                            'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
-                            'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-                        }
+                        for sp in root.iter(f"{{{ns_xdr}}}sp"):
+                            cnv  = sp.find(".//xdr:nvSpPr/xdr:cNvPr", nsmap)
+                            nome = cnv.get("name", "") if cnv is not None else ""
 
-                        # Percorrer todos os shapes
-                        for sp in root.iter('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}sp'):
-                            # Nome do shape em xdr:nvSpPr/xdr:cNvPr/@name
-                            cnv_pr = sp.find('.//xdr:nvSpPr/xdr:cNvPr', nsmap)
-                            if cnv_pr is None:
-                                continue
-                            nome = cnv_pr.get('name', '')
-
-                            # Determinar qual cor aplicar
-                            # Usa nomes detectados automaticamente (shape_sim/shape_nao).
-                            # Fallback: compara com padrão hardcoded se não foram detectados.
-                            cor = None
-                            _sim = shape_sim or "QO012,12.L0C0;L0C-34^"
-                            _nao = shape_nao or "QO012,22.L0C0;L0C-37^"
-                            if nome == _sim:
-                                cor = "000000" if esgoto_sim else "FFFFFF"
-                            elif nome == _nao:
-                                cor = "000000" if not esgoto_sim else "FFFFFF"
-                            # Geminadas loteamentos (linha 64)
-                            elif nome == "QOCI,13.L0C-32;L0C-34^":
-                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "sim" else "FFFFFF"
-                            elif nome == "QOCI,23.L0C-35;L0C-37^":
-                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "nao" else "FFFFFF"
-                            elif nome == "QOCI,33.L0C-38;L0C-40^":
-                                cor = "000000" if GEMINADAS_LOTEAMENTOS == "nao_se_aplica" else "FFFFFF"
-                            # Geminadas condomínios (linha 65)
-                            elif nome == "QOCN,13.L0C-32;L0C-34^":
-                                cor = "000000" if GEMINADAS_CONDOMINIOS == "sim" else "FFFFFF"
-                            elif nome == "QOCN,23.L0C-35;L0C-37^":
-                                cor = "000000" if GEMINADAS_CONDOMINIOS == "nao" else "FFFFFF"
-                            elif nome == "QOCN,33.L0C-38;L0C-40^":
-                                cor = "000000" if GEMINADAS_CONDOMINIOS == "nao_se_aplica" else "FFFFFF"
-
-                            if cor is None:
+                            if nome not in mapa:
                                 continue
 
-                            shapes_encontrados += 1
-
-                            # Buscar o solidFill dentro do shape e modificar a cor
-                            # Estrutura: xdr:sp/xdr:spPr/a:solidFill/a:srgbClr
-                            sp_pr = sp.find('.//xdr:spPr', nsmap)
+                            marcado = mapa[nome]
+                            sp_pr   = sp.find(".//xdr:spPr", nsmap)
                             if sp_pr is None:
                                 continue
 
-                            # Remover fills existentes para aplicar novo limpo
-                            for fill_type in ['a:solidFill', 'a:noFill', 'a:gradFill']:
-                                existing = sp_pr.find(fill_type, nsmap)
-                                if existing is not None:
-                                    sp_pr.remove(existing)
+                            # Remover qualquer fill existente
+                            for tag in [f"{{{ns_a}}}solidFill",
+                                        f"{{{ns_a}}}noFill",
+                                        f"{{{ns_a}}}gradFill"]:
+                                el = sp_pr.find(tag)
+                                if el is not None:
+                                    sp_pr.remove(el)
 
-                            # Criar novo solidFill com a cor
-                            solid_fill = etree.SubElement(
-                                sp_pr,
-                                '{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill'
-                            )
-                            srgb_clr = etree.SubElement(
-                                solid_fill,
-                                '{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr'
-                            )
-                            srgb_clr.set('val', cor)
+                            if marcado:
+                                # Inserir solidFill preto logo após xfrm (ou no início)
+                                solid = etree.SubElement(sp_pr, f"{{{ns_a}}}solidFill")
+                                srgb  = etree.SubElement(solid, f"{{{ns_a}}}srgbClr")
+                                srgb.set("val", "000000")
+                                sp_pr.remove(solid)
+                                xfrm = sp_pr.find(f"{{{ns_a}}}xfrm")
+                                if xfrm is not None:
+                                    xfrm.addnext(solid)
+                                else:
+                                    sp_pr.insert(0, solid)
 
-                            # Reordenar: solidFill precisa vir em posição específica
-                            # dentro de spPr. Movemos para logo após xfrm se existir,
-                            # senão no início de spPr.
-                            sp_pr.remove(solid_fill)
-                            xfrm = sp_pr.find('a:xfrm', nsmap)
-                            if xfrm is not None:
-                                xfrm.addnext(solid_fill)
-                            else:
-                                sp_pr.insert(0, solid_fill)
+                            shapes_ok += 1
 
-                        # Serializar com lxml (PRESERVA prefixos de namespace)
                         data = etree.tostring(
                             root,
                             xml_declaration=True,
@@ -829,19 +343,19 @@ def _marcar_checkboxes_nativos(xlsx_path, esgoto_sim, log=None,
 
         os.unlink(tmp_path)
 
-        if shapes_encontrados == 0:
+        if shapes_ok == 0:
             if log:
-                log("  ⚠ Shapes de checkbox NÃO encontrados no XML")
-            return False
-
-        if log:
-            log(f"  ✓ {shapes_encontrados} shape(s) de checkbox modificado(s) nativamente")
-        return True
+                log("  ⚠ Nenhum shape de checkbox encontrado no XML")
+        else:
+            if log:
+                log(f"  ✓ {shapes_ok} checkbox(es) marcado(s) via XML")
 
     except Exception as e:
         if log:
-            log(f"  ✗ Falha no método nativo: {e}")
-        return False
+            log(f"  ✗ Falha ao aplicar checkboxes: {e}")
+
+
+
 
 
 def _fechar_excel(xl, wb):
@@ -859,19 +373,13 @@ def _fechar_excel(xl, wb):
         except Exception: pass
 
 
-def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
-                     modo_mapeado, esgoto_sim, modo_checkbox="auto", log=None):
+def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log=None):
     """
-    Preenche o Memorial Excel via win32com (nativo, preserva tudo).
+    Copia o template virgem para xlsx_saida e preenche via win32com.
+    Checkboxes NÃO são tocados aqui — feitos depois por _aplicar_checkboxes_xml.
+    """
+    import pythoncom, win32com.client
 
-    Args:
-        modo_mapeado: True = células fixas; False = detectar azul
-        esgoto_sim: True = sistema com esgoto público
-        modo_checkbox: "nativo" | "imagem" | "auto"
-            - nativo: manipula shapes existentes via XML (preserva visual original)
-            - imagem: sobrepõe PNG na posição (fallback confiável)
-            - auto: tenta nativo, se falhar usa imagem
-    """
     pythoncom.CoInitialize()
     xl = None
     wb = None
@@ -886,7 +394,6 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
 
         wb = xl.Workbooks.Open(os.path.abspath(template_path))
 
-        # Localizar a aba correta
         try:
             ws = wb.Worksheets("ElemConstrutivos")
         except Exception:
@@ -894,59 +401,50 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
             if log:
                 log(f"  ⚠ Aba 'ElemConstrutivos' não encontrada, usando: {ws.Name}")
 
-        if modo_mapeado:
-            mapa = {
-                "G40": dados.get("contratante", ""),
-                "G43": dados.get("engenheiro_nome", ""),
-                "AH43": dados.get("crea", ""),
-                "AP43": "GO",
-                "AR43": dados.get("cpf", ""),
-                "G47": dados.get("logradouro", ""),
-                "AJ47": f"{dados.get('quadra_lote', '')}   CASA {num_casa}",
-                "G49": dados.get("bairro", ""),
-                "V49": dados.get("cep", ""),
-                "AA49": dados.get("cidade", ""),
-                "AU49": dados.get("uf", ""),
-                "H53": dados.get("engenheiro_nome", ""),
-                "Y54": dados.get("art", ""),
-                "H75": f"GOIÂNIA, {formatar_data_extenso()}",
-                "AE77": dados.get("engenheiro_nome", ""),
-                "AE78": dados.get("cpf", ""),
-                "AE79": dados.get("crea", ""),
-            }
-            for coord, val in mapa.items():
-                try:
-                    rng = ws.Range(coord)
-                    rng.Value = val
-                    rng.Font.Color = 0  # preto (RGB 0,0,0)
-                except Exception as e:
-                    if log:
-                        log(f"  ⚠ Célula {coord} falhou: {e}")
+        mapa = {
+            "G40": dados.get("contratante", ""),
+            "G43": dados.get("engenheiro_nome", ""),
+            "AH43": dados.get("crea", ""),
+            "AP43": "GO",
+            "AR43": dados.get("cpf", ""),
+            "G47": dados.get("logradouro", ""),
+            "AJ47": f"{dados.get('quadra_lote', '')}   CASA {num_casa}",
+            "G49": dados.get("bairro", ""),
+            "V49": dados.get("cep", ""),
+            "AA49": dados.get("cidade", ""),
+            "AU49": dados.get("uf", ""),
+            "H53": dados.get("engenheiro_nome", ""),
+            "Y54": dados.get("art", ""),
+            "H75": f"GOIÂNIA, {formatar_data_extenso()}",
+            "AE77": dados.get("engenheiro_nome", ""),
+            "AE78": dados.get("cpf", ""),
+            "AE79": dados.get("crea", ""),
+        }
+        for coord, val in mapa.items():
+            try:
+                rng = ws.Range(coord)
+                rng.Value = val
+                rng.Font.Color = 0
+            except Exception as e:
+                if log:
+                    log(f"  ⚠ Célula {coord} falhou: {e}")
 
-
-        # ===================================================================
-        # CHECKBOXES: feito APÓS salvar (fora do win32com)
-        # Isso porque o método nativo (XML) precisa do arquivo salvo,
-        # e o método imagem é mais simples de fazer num passo separado.
-        # ===================================================================
-
-        # ===================================================================
-        # INSERIR ASSINATURA DO ENGENHEIRO (via win32com — qualidade preservada)
-        # ===================================================================
+        # Inserir assinatura
         ass_path = dados.get("assinatura_path", "")
         if ass_path and os.path.exists(ass_path):
             try:
-                _inserir_imagem_excel_win32(
-                    ws,
-                    ass_path,
-                    ASSINATURA_EXCEL_ANCORA,
-                    ASSINATURA_EXCEL_OFFSET_X_PT,
-                    ASSINATURA_EXCEL_OFFSET_Y_PT,
+                cell = ws.Range(ASSINATURA_EXCEL_ANCORA)
+                left = cell.Left + ASSINATURA_EXCEL_OFFSET_X_PT
+                top  = cell.Top  + ASSINATURA_EXCEL_OFFSET_Y_PT
+                ws.Shapes.AddPicture(
+                    os.path.abspath(ass_path),
+                    False, True,
+                    left, top,
                     ASSINATURA_EXCEL_LARGURA_PT,
                     ASSINATURA_EXCEL_ALTURA_PT,
                 )
                 if log:
-                    log("  ✓ Assinatura do engenheiro inserida (alta qualidade)")
+                    log("  ✓ Assinatura inserida")
             except Exception as e:
                 if log:
                     log(f"  ⚠ Falha ao inserir assinatura: {e}")
@@ -957,102 +455,6 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa,
     finally:
         _fechar_excel(xl, wb)
         pythoncom.CoUninitialize()
-
-
-def _quadrado_preto_temp():
-    """Gera PNG temporário de quadrado preto sólido (■)."""
-    import tempfile
-    from PIL import Image
-    tmp = tempfile.mktemp(suffix=".png")
-    Image.new("RGBA", (20, 20), (0, 0, 0, 255)).save(tmp)
-    return tmp
-
-
-def _aplicar_checkboxes(xlsx_path, esgoto_sim, modo_checkbox="auto", log=None):
-    """
-    Aplica a marcação de esgoto SIM/NÃO no Memorial.
-
-    modo_checkbox:
-        "nativo" — só tenta XML (se falhar, fica sem marcação)
-        "imagem" — só sobrepõe PNG
-        "auto"   — tenta nativo; se falhar, cai pra imagem
-
-    Retorna string com o método que funcionou: "nativo", "imagem" ou "nenhum".
-    """
-    metodo_usado = "imagem"
-
-    # Inserir quadrado preto calibrado para cada estado
-    # Estado determinado por esgoto_sim + geminadas
-    q_preto = _quadrado_preto_temp()
-
-    pythoncom.CoInitialize()
-    xl = None
-    wb = None
-    try:
-        xl = win32com.client.Dispatch("Excel.Application")
-        try: xl.Visible = False
-        except Exception: pass
-        try: xl.DisplayAlerts = False
-        except Exception: pass
-        wb = xl.Workbooks.Open(os.path.abspath(xlsx_path))
-        try:
-            ws = wb.Worksheets("ElemConstrutivos")
-        except Exception:
-            ws = wb.Worksheets(1)
-
-        # ── LIMPEZA: remover checkboxes de execuções anteriores ──────────────
-        # O template pode ter sido reutilizado ou o arquivo já foi processado
-        # antes. Sem limpeza, cada execução acumula um shape extra, causando
-        # checkboxes deslocados na exportação para PDF.
-        # Critério: shapes pequenos (≤ 10 pt em qualquer dimensão) que não
-        # sejam imagens de assinatura (assinatura tem >50 pt de largura).
-        try:
-            shapes_removidos = 0
-            # Itera de trás pra frente para evitar índice inválido após remoção
-            for i in range(ws.Shapes.Count, 0, -1):
-                sh = ws.Shapes(i)
-                w = sh.Width
-                h = sh.Height
-                # Checkbox: pequeno (≤ 12 pt) e não é a assinatura (>50 pt)
-                if w <= 12 and h <= 12:
-                    sh.Delete()
-                    shapes_removidos += 1
-            if log and shapes_removidos:
-                log(f"  • {shapes_removidos} shape(s) antigo(s) removido(s) antes de inserir")
-        except Exception as e:
-            if log:
-                log(f"  ⚠ Limpeza de shapes falhou (não crítico): {e}")
-
-        # Estado 1 ou 2: esgoto
-        if esgoto_sim:
-            _inserir_imagem_excel_win32(ws, q_preto, CHK1_ANCORA,
-                                        CHK1_OFF_X, CHK1_OFF_Y, CHK1_LARGURA, CHK1_ALTURA)
-            if log: log(f"  ✓ Checkbox esgoto SIM inserido em {CHK1_ANCORA}")
-        else:
-            _inserir_imagem_excel_win32(ws, q_preto, CHK2_ANCORA,
-                                        CHK2_OFF_X, CHK2_OFF_Y, CHK2_LARGURA, CHK2_ALTURA)
-            if log: log(f"  ✓ Checkbox esgoto NÃO inserido em {CHK2_ANCORA}")
-
-        # Estado 3 ou 4: condomínios
-        if GEMINADAS_CONDOMINIOS == "sim":
-            _inserir_imagem_excel_win32(ws, q_preto, CHK3_ANCORA,
-                                        CHK3_OFF_X, CHK3_OFF_Y, CHK3_LARGURA, CHK3_ALTURA)
-            if log: log(f"  ✓ Checkbox condomínio SIM inserido em {CHK3_ANCORA}")
-        elif GEMINADAS_CONDOMINIOS == "nao_se_aplica":
-            _inserir_imagem_excel_win32(ws, q_preto, CHK4_ANCORA,
-                                        CHK4_OFF_X, CHK4_OFF_Y, CHK4_LARGURA, CHK4_ALTURA)
-            if log: log(f"  ✓ Checkbox condomínio NSA inserido em {CHK4_ANCORA}")
-
-        wb.Save()
-        if log: log("  ✓ Checkboxes inseridos")
-
-    except Exception as e:
-        if log: log(f"  ⚠ Falha ao inserir checkboxes: {e}")
-    finally:
-        _fechar_excel(xl, wb)
-        pythoncom.CoUninitialize()
-
-    return metodo_usado
 
 
 def _excel_para_pdf(xlsx_path, pdf_path, log=None):
@@ -1750,10 +1152,6 @@ class App(tk.Tk):
         col_dir.pack(side="right", fill="both", expand=True, padx=(10, 0))
 
         # --- Coluna esquerda ---
-        self._secao_label(col_esq, "MEMORIAL EXCEL")
-        self.var_memorial = tk.StringVar()
-        self._campo_arquivo(col_esq, self.var_memorial, "Arquivo Memorial (.xls/.xlsx)")
-
         self._secao_label(col_esq, "ENGENHEIRO RESPONSÁVEL")
         self.var_engenheiro = tk.StringVar()
         combo_eng = ttk.Combobox(
@@ -1936,7 +1334,6 @@ class App(tk.Tk):
 
         self._secao_label(p, "CASAS GEMINADAS")
         _og = ["Não se aplica", "Sim", "Não"]
-        self.var_gem_lot = tk.StringVar(value="Não se aplica")
         tk.Label(p, text="Condomínios",
                  bg=COR_FUNDO, fg=COR_TEXTO_SEC, font=("Segoe UI", 8)).pack(anchor="w")
         self.var_gem_cond = tk.StringVar(value="Não se aplica")
@@ -2107,9 +1504,6 @@ class App(tk.Tk):
     def _iniciar_geracao(self):
         """Valida entradas e dispara thread de processamento."""
         # Validações básicas
-        if not self.var_memorial.get() or not os.path.exists(self.var_memorial.get()):
-            messagebox.showerror("Erro", "Selecione um arquivo Memorial Excel válido.")
-            return
         if not self.var_engenheiro.get():
             messagebox.showerror("Erro", "Selecione o engenheiro responsável.")
             return
@@ -2349,27 +1743,19 @@ class App(tk.Tk):
             }
 
             esgoto_sim = self.var_esgoto.get()
-            modo_checkbox = "imagem"  # fixo — método calibrado
-            modo_mapeado = True  # sempre modo mapeado (não mapeado removido)
 
-            # Atualizar constantes globais de geminadas
+            # Atualizar estado global de condomínios
             _mg = {"Não se aplica": "nao_se_aplica", "Sim": "sim", "Não": "nao"}
-            global GEMINADAS_LOTEAMENTOS, GEMINADAS_CONDOMINIOS
-            GEMINADAS_LOTEAMENTOS = _mg.get(self.var_gem_lot.get(), "nao_se_aplica")
+            global GEMINADAS_CONDOMINIOS
             GEMINADAS_CONDOMINIOS = _mg.get(self.var_gem_cond.get(), "nao_se_aplica")
             qtd = self.var_qtd_casas.get()
-            template_excel_orig = self.var_memorial.get()
 
-            # Converter .xls → .xlsx UMA VEZ antes do loop.
-            # Evita múltiplas instâncias Excel simultâneas (causa de travamento).
-            if template_excel_orig.lower().endswith(".xls"):
-                self.log("• Convertendo template .xls → .xlsx (uma vez)...")
-                template_excel, criou_temp_tpl = _xls_para_xlsx_temp(template_excel_orig)
-                if criou_temp_tpl:
-                    template_excel_temp = template_excel
-                self.log(f"  ✓ Template convertido")
-            else:
-                template_excel = template_excel_orig
+            # Template Excel embutido em assets — sempre parte de cópia limpa
+            template_excel = asset(TEMPLATE_EXCEL)
+            if not os.path.exists(template_excel):
+                raise FileNotFoundError(
+                    f"Template Excel não encontrado em assets: {TEMPLATE_EXCEL}"
+                )
 
             # Pasta destino — sem subpasta de data
             rua_qd_lt = f"{dados['logradouro']} {dados['quadra_lote']}".strip()
@@ -2407,22 +1793,19 @@ class App(tk.Tk):
                 etapa_atual += 1
                 self._set_progress(etapa_atual * 100 / total_etapas)
 
-                # 3. Excel
+                # 3. Excel — preencher + checkboxes XML
                 self._check_stop()
                 self.log(f"• Preenchendo Memorial (Excel)...")
                 xlsx_path = pasta_saida / f"MEMORIAL_{base_nome}.xlsx"
                 _excel_preencher(
                     template_excel, str(xlsx_path), dados, i,
-                    modo_mapeado, esgoto_sim, modo_checkbox=modo_checkbox,
-                    log=self.log,
+                    esgoto_sim, log=self.log,
                 )
 
-                # 3.5 Aplicar checkboxes (método híbrido — NOVO v4)
                 self._check_stop()
-                self.log(f"• Aplicando checkboxes (modo: {modo_checkbox})...")
-                _aplicar_checkboxes(
-                    str(xlsx_path), esgoto_sim,
-                    modo_checkbox=modo_checkbox, log=self.log,
+                self.log(f"• Aplicando checkboxes (XML nativo)...")
+                _aplicar_checkboxes_xml(
+                    str(xlsx_path), esgoto_sim, log=self.log,
                 )
 
                 etapa_atual += 1
@@ -2452,12 +1835,6 @@ class App(tk.Tk):
             self._set_status("Erro.")
             self.after(0, lambda: messagebox.showerror("Erro", str(e)))
         finally:
-            # Limpar temp do template se criado
-            try:
-                if template_excel_temp and os.path.exists(template_excel_temp):
-                    os.unlink(template_excel_temp)
-            except Exception:
-                pass
             self.processando = False
             self.stop_event.clear()
             self.after(0, lambda: self.btn_gerar.configure(state="normal"))
