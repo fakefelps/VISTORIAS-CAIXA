@@ -429,9 +429,10 @@ def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
     """
     Marca os checkboxes variáveis do Memorial via XML direto no .xlsx.
 
-    Método: pintar solidFill do shape nativo com 000000 (marcado) ou
-    remover o solidFill (desmarcado/vazio). Sem imagens sobrepostas,
-    sem dependência de DPI, sem variação entre PCs.
+    Esses shapes usam <a14:hiddenFill> dentro de <a:extLst> como fill real
+    (comportamento de shapes legados do Excel). É necessário atualizar TANTO
+    o solidFill direto do spPr quanto o hiddenFill no extLst — caso contrário
+    a cor não aparece na renderização.
 
     Shapes controlados:
       - Esgoto SIM/NÃO  (linha 70): SHAPE_ESGOTO_SIM / SHAPE_ESGOTO_NAO
@@ -440,6 +441,11 @@ def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
     """
     import tempfile, shutil, zipfile
     from lxml import etree
+
+    NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    NS_A   = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    NS_A14 = "http://schemas.microsoft.com/office/drawing/2010/main"
+    NS_MC  = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
     # Mapa shape → deve ficar marcado (True) ou desmarcado (False)
     mapa = {
@@ -450,6 +456,52 @@ def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
         SHAPE_COND_NSA:   GEMINADAS_CONDOMINIOS == "nao_se_aplica",
     }
 
+    def _set_fill(sp_pr, marcado):
+        """
+        Atualiza o fill em dois lugares:
+          1. solidFill direto no spPr (fill padrão DrawingML)
+          2. hiddenFill dentro de extLst (fill legado que o Excel prioriza)
+        """
+        cor = "000000" if marcado else "FFFFFF"
+
+        # ── 1. solidFill direto no spPr ─────────────────────────────────────
+        for tag in [f"{{{NS_A}}}solidFill", f"{{{NS_A}}}noFill", f"{{{NS_A}}}gradFill"]:
+            el = sp_pr.find(tag)
+            if el is not None:
+                sp_pr.remove(el)
+
+        solid = etree.Element(f"{{{NS_A}}}solidFill")
+        srgb  = etree.SubElement(solid, f"{{{NS_A}}}srgbClr")
+        srgb.set("val", cor)
+        xfrm = sp_pr.find(f"{{{NS_A}}}xfrm")
+        if xfrm is not None:
+            xfrm.addnext(solid)
+        else:
+            sp_pr.insert(0, solid)
+
+        # ── 2. hiddenFill dentro de extLst ──────────────────────────────────
+        ext_lst = sp_pr.find(f"{{{NS_A}}}extLst")
+        if ext_lst is None:
+            return  # sem extLst, o solidFill direto já basta
+
+        URI_HIDDEN = "{909E8E84-426E-40DD-AFC4-6F175D3DCCD1}"
+        for ext in ext_lst.findall(f"{{{NS_A}}}ext"):
+            if ext.get("uri") != URI_HIDDEN:
+                continue
+            hidden = ext.find(f"{{{NS_A14}}}hiddenFill")
+            if hidden is None:
+                continue
+            # Substituir o solidFill dentro do hiddenFill
+            for child in list(hidden):
+                hidden.remove(child)
+            hsolid = etree.SubElement(hidden, f"{{{NS_A}}}solidFill")
+            hsrgb  = etree.SubElement(hsolid, f"{{{NS_A}}}srgbClr")
+            hsrgb.set("val", cor)
+            # Atributos de compatibilidade que o Excel espera
+            hsrgb.set(f"{{{NS_MC}}}Ignorable", "a14")
+            hsrgb.set(f"{{{NS_A14}}}legacySpreadsheetColorIndex",
+                      "8" if marcado else "65")
+
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
         os.close(tmp_fd)
@@ -457,50 +509,27 @@ def _aplicar_checkboxes_xml(xlsx_path, esgoto_sim, log=None):
 
         shapes_ok = 0
 
-        with zipfile.ZipFile(tmp_path, "r") as zi,              zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
+        with zipfile.ZipFile(tmp_path, "r") as zi, \
+             zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zo:
 
             for item in zi.infolist():
                 data = zi.read(item.filename)
 
-                if item.filename.startswith("xl/drawings/drawing") and                    item.filename.endswith(".xml"):
+                if item.filename.startswith("xl/drawings/drawing") and \
+                   item.filename.endswith(".xml"):
                     try:
                         root = etree.fromstring(data)
-                        ns_xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
-                        ns_a   = "http://schemas.openxmlformats.org/drawingml/2006/main"
-                        nsmap  = {"xdr": ns_xdr, "a": ns_a}
+                        nsmap = {"xdr": NS_XDR, "a": NS_A}
 
-                        for sp in root.iter(f"{{{ns_xdr}}}sp"):
+                        for sp in root.iter(f"{{{NS_XDR}}}sp"):
                             cnv  = sp.find(".//xdr:nvSpPr/xdr:cNvPr", nsmap)
                             nome = cnv.get("name", "") if cnv is not None else ""
-
                             if nome not in mapa:
                                 continue
-
-                            marcado = mapa[nome]
-                            sp_pr   = sp.find(".//xdr:spPr", nsmap)
+                            sp_pr = sp.find(".//xdr:spPr", nsmap)
                             if sp_pr is None:
                                 continue
-
-                            # Remover qualquer fill existente
-                            for tag in [f"{{{ns_a}}}solidFill",
-                                        f"{{{ns_a}}}noFill",
-                                        f"{{{ns_a}}}gradFill"]:
-                                el = sp_pr.find(tag)
-                                if el is not None:
-                                    sp_pr.remove(el)
-
-                            if marcado:
-                                # Inserir solidFill preto logo após xfrm (ou no início)
-                                solid = etree.SubElement(sp_pr, f"{{{ns_a}}}solidFill")
-                                srgb  = etree.SubElement(solid, f"{{{ns_a}}}srgbClr")
-                                srgb.set("val", "000000")
-                                sp_pr.remove(solid)
-                                xfrm = sp_pr.find(f"{{{ns_a}}}xfrm")
-                                if xfrm is not None:
-                                    xfrm.addnext(solid)
-                                else:
-                                    sp_pr.insert(0, solid)
-
+                            _set_fill(sp_pr, mapa[nome])
                             shapes_ok += 1
 
                         data = etree.tostring(
