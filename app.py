@@ -472,8 +472,18 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log
     """
     Copia o template virgem para xlsx_saida e preenche via win32com.
     Checkboxes inseridos via imagem na mesma sessão COM.
+    O template original NUNCA é modificado — trabalhamos sempre na cópia.
     """
     import pythoncom, win32com.client
+
+    # ── PROTEÇÃO DO TEMPLATE ─────────────────────────────────────────────
+    # Copia o template para o destino ANTES de abrir o Excel.
+    # Assim o Excel trabalha na cópia e o arquivo base permanece intacto,
+    # mesmo que ocorra um erro durante o processamento.
+    shutil.copy2(template_path, xlsx_saida)
+    if log:
+        log(f"  • Cópia do template criada: {os.path.basename(xlsx_saida)}")
+    # ─────────────────────────────────────────────────────────────────────
 
     pythoncom.CoInitialize()
     xl = None
@@ -487,7 +497,8 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log
         try: xl.ScreenUpdating = False
         except Exception: pass
 
-        wb = xl.Workbooks.Open(os.path.abspath(template_path))
+        # Abre a CÓPIA (não o template original)
+        wb = xl.Workbooks.Open(os.path.abspath(xlsx_saida))
 
         try:
             ws = wb.Worksheets("ElemConstrutivos")
@@ -573,8 +584,8 @@ def _excel_preencher(template_path, xlsx_saida, dados, num_casa, esgoto_sim, log
             try: os.unlink(q)
             except: pass
 
-        # Salvar como .xlsx (51 = xlOpenXMLWorkbook)
-        wb.SaveAs(os.path.abspath(xlsx_saida), FileFormat=51)
+        # Salva as alterações na cópia (já está no caminho correto desde o shutil.copy2)
+        wb.Save()
 
     finally:
         _fechar_excel(xl, wb)
@@ -965,8 +976,13 @@ def _scpo_obter_chromedriver(log_cb=print):
     return str(driver_path)
 
 
-def _scpo_montar_nome_obra(logradouro, quadra, lote):
-    return f"RESIDENCIAL {logradouro.upper()} QUADRA {quadra} LOTE {lote}"
+def _scpo_montar_nome_obra(logradouro, quadra_lote_raw):
+    """
+    Monta o nome da obra para o SCPO.
+    Usa o valor bruto de 'Quadra e Lote' exatamente como o usuário digitou,
+    sem duplicar prefixos QUADRA/LOTE que o usuário já incluiu.
+    """
+    return f"RESIDENCIAL {logradouro.upper()} {quadra_lote_raw.upper()}"
 
 
 def _scpo_montar_observacao(logradouro, quadra, lote, n_casas,
@@ -1087,12 +1103,13 @@ def _scpo_executar(dados, step_cb, log_cb, done_cb,
             n.clear(); n.send_keys("SN")
         except Exception: pass
 
-        # Complemento
+        # Complemento — usa o valor exato do campo "Quadra e Lote" como digitado pelo usuário.
+        # Não acrescentamos QUADRA/LOTE automaticamente pois o usuário já os inclui.
         try:
             c = driver.find_element(_By_scpo.XPATH,
                 "//input[contains(@id,'Complemento') or contains(@id,'complemento')]")
             c.clear()
-            c.send_keys(f"QUADRA {dados['quadra']} LOTE {dados['lote']}")
+            c.send_keys(dados.get("quadra_lote_raw", f"QUADRA {dados['quadra']} LOTE {dados['lote']}"))
         except Exception: pass
 
         # Observação
@@ -1793,22 +1810,23 @@ class App(tk.Tk):
         rua2 = ruas_casas[1] if len(ruas_casas) >= 2 else ""
 
         dados_scpo = {
-            "senha":       self.var_scpo_senha.get().strip(),
-            "cep":         self.var_cep.get().strip(),
-            "logradouro":  self.var_logradouro.get().strip(),
-            "quadra":      quadra,
-            "lote":        lote,
-            "n_casas":     n_casas,
-            "esquina":     self.var_esquina.get(),
-            "rua2":        rua2,
-            "ruas_casas":  ruas_casas,
-            "data_inicio": self.var_scpo_data_inicio.get().strip(),
-            "nome_obra":   _scpo_montar_nome_obra(
-                               self.var_logradouro.get().strip(), quadra, lote),
-            "observacao":  _scpo_montar_observacao(
-                               self.var_logradouro.get().strip(), quadra, lote,
-                               n_casas, self.var_esquina.get(),
-                               rua2, ruas_casas),
+            "senha":           self.var_scpo_senha.get().strip(),
+            "cep":             self.var_cep.get().strip(),
+            "logradouro":      self.var_logradouro.get().strip(),
+            "quadra":          quadra,
+            "lote":            lote,
+            "quadra_lote_raw": ql,   # valor bruto como o usuário digitou
+            "n_casas":         n_casas,
+            "esquina":         self.var_esquina.get(),
+            "rua2":            rua2,
+            "ruas_casas":      ruas_casas,
+            "data_inicio":     self.var_scpo_data_inicio.get().strip(),
+            "nome_obra":       _scpo_montar_nome_obra(
+                                   self.var_logradouro.get().strip(), ql),
+            "observacao":      _scpo_montar_observacao(
+                                   self.var_logradouro.get().strip(), quadra, lote,
+                                   n_casas, self.var_esquina.get(),
+                                   rua2, ruas_casas),
         }
 
         # Resetar eventos
