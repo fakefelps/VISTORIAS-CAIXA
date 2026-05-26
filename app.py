@@ -985,8 +985,13 @@ def _scpo_montar_nome_obra(logradouro, quadra_lote_raw):
     return f"RESIDENCIAL {logradouro.upper()} {quadra_lote_raw.upper()}"
 
 
-def _scpo_montar_observacao(logradouro, quadra, lote, n_casas,
+def _scpo_montar_observacao(logradouro, quadra_lote_raw, n_casas,
                              esquina, rua2, ruas_casas):
+    """
+    Monta a descrição da obra para o campo 'Descrição da obra' do SCPO.
+    Usa quadra_lote_raw exatamente como o usuário digitou no campo 'Quadra e Lote',
+    sem acrescentar prefixos QUADRA/LOTE que o usuário já incluiu.
+    """
     casas = []
     for i in range(1, n_casas + 1):
         label = f"CASA {i}"
@@ -996,9 +1001,9 @@ def _scpo_montar_observacao(logradouro, quadra, lote, n_casas,
     casas_str = ", ".join(casas)
     if not esquina:
         return (f"OBRA RESIDENCIAL UNIFAMILIAR SITUADA NA {logradouro.upper()}, "
-                f"QUADRA {quadra} LOTE {lote} COMPOSTA POR: {casas_str}")
+                f"{quadra_lote_raw.upper()} COMPOSTA POR: {casas_str}")
     return (f"OBRA RESIDENCIAL UNIFAMILIAR SITUADA NA {logradouro.upper()} "
-            f"E {rua2.upper()}, QUADRA {quadra} LOTE {lote} "
+            f"E {rua2.upper()}, {quadra_lote_raw.upper()} "
             f"COMPOSTA POR: {casas_str}")
 
 
@@ -1824,7 +1829,7 @@ class App(tk.Tk):
             "nome_obra":       _scpo_montar_nome_obra(
                                    self.var_logradouro.get().strip(), ql),
             "observacao":      _scpo_montar_observacao(
-                                   self.var_logradouro.get().strip(), quadra, lote,
+                                   self.var_logradouro.get().strip(), ql,
                                    n_casas, self.var_esquina.get(),
                                    rua2, ruas_casas),
         }
