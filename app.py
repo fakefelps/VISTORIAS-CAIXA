@@ -175,27 +175,27 @@ ENGENHEIROS = {
     },
     "CAIO ARAUJO BRAGA": {
         "cpf": "011.309.411-67",
-        "crea": "CREA-GO",
+        "crea": "2015108234/D-RJ",
         "assinatura": "CAIO.png",
     },
     "JOÃO VITOR CABRAL DE MORAIS": {
         "cpf": "038.144.411-25",
-        "crea": "CREA-GO",
+        "crea": "1017380449D-GO",
         "assinatura": "JOÃO VITOR.jpg",
     },
     "JULIO CESAR GOMES DE MORAIS FILHO": {
         "cpf": "033.865.821-17",
-        "crea": "CREA-GO",
+        "crea": "25553/D-GO",
         "assinatura": "JULIO CESAR.png",
     },
     "PAULA FLEURY DE MORAIS": {
         "cpf": "033.813.881-18",
-        "crea": "CREA-GO",
+        "crea": "1017879796D-GO",
         "assinatura": "PAULA.png",
     },
     "ISAAC NATAN SANTOS": {
         "cpf": "701.117.261-07",
-        "crea": "CREA-GO",
+        "crea": "1019076984D-GO",
         "assinatura": "ISAAC.png",
     },
 }
